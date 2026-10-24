@@ -17,7 +17,7 @@
 
 import * as THREE from 'three';
 import { clone as cloneSkinned } from 'three/addons/utils/SkeletonUtils.js';
-import { PLAYER_HEIGHT } from './shared.js';
+import { PLAYER_HEIGHT, TEAMS } from './shared.js';
 import { SKINS, assets } from './assets.js';
 
 const LOCOMOTION = ['run_forward', 'run_backward', 'strafe_left', 'strafe_right'];
@@ -56,10 +56,11 @@ export function makeRifle() {
 }
 
 export class Character {
-  constructor(name, skin) {
+  constructor(name, skin, team) {
     const skinName = SKINS[((skin % SKINS.length) + SKINS.length) % SKINS.length];
     this.gender = skinName.startsWith('Female') ? 'female' : 'male';
 
+    this.team = team;
     this.dead = false;
     this.velocity = new THREE.Vector3();
     this.lastPos = null;
@@ -120,7 +121,7 @@ export class Character {
     this.shadow.rotation.x = -Math.PI / 2;
     this.shadow.position.y = 0.015;
     this.object.add(this.shadow);
-    this.label = makeLabel(name);
+    this.label = makeLabel(name, TEAMS[team]?.color ?? '#fff');
     this.object.add(this.label);
   }
 
@@ -320,7 +321,7 @@ function solveTwoBone(upper, lower, end, target) {
   rotateBoneByWorldQuat(upper, new THREE.Quaternion().setFromUnitVectors(_c, _t));
 }
 
-function makeLabel(text) {
+function makeLabel(text, color) {
   const canvas = document.createElement('canvas');
   canvas.width = 512;
   canvas.height = 64;
@@ -332,7 +333,7 @@ function makeLabel(text) {
   ctx.lineJoin = 'round';
   ctx.strokeStyle = 'rgba(0,0,0,0.8)';
   ctx.strokeText(text, 256, 32);
-  ctx.fillStyle = '#fff';
+  ctx.fillStyle = color;
   ctx.fillText(text, 256, 32);
   const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(canvas), depthTest: false }));
   sprite.scale.set(3.2, 0.4, 1);

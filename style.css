@@ -22,6 +22,9 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #000; font-f
 #damage { position: absolute; inset: 0; box-shadow: inset 0 0 120px rgba(255, 0, 0, 0.8); opacity: 0; transition: opacity 0.4s; }
 #damage.show { opacity: 1; transition: none; }
 #roomInfo { position: absolute; top: 12px; left: 12px; font-size: 14px; background: rgba(0, 0, 0, 0.5); padding: 6px 10px; border-radius: 4px; }
+#teamScore { position: absolute; top: 12px; left: 50%; transform: translateX(-50%); display: flex; gap: 18px; font-size: 22px; font-weight: 700; background: rgba(0, 0, 0, 0.5); padding: 4px 14px; border-radius: 4px; text-shadow: 0 0 3px #000; }
+#teamScore:empty { display: none; }
+#teamScore .mine { text-decoration: underline; text-underline-offset: 4px; }
 #killfeed { position: absolute; top: 12px; right: 12px; display: flex; flex-direction: column; gap: 4px; align-items: flex-end; font-size: 14px; }
 #killfeed div { background: rgba(0, 0, 0, 0.5); padding: 4px 8px; border-radius: 4px; }
 #hp { position: absolute; bottom: 20px; left: 20px; font-size: 36px; font-weight: 700; text-shadow: 0 0 4px #000; }

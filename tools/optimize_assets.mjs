@@ -11,7 +11,10 @@
 //   removed, rotations stored as 16-bit, meshopt-compressed.
 // Map (from tools/export_map.py): visual geometry flattened and joined by
 //   material (a few draw calls for the whole map), same texture treatment as
-//   the kit; collision reduced to positions only.
+//   the kit; collision reduced to positions only. With a baked lightmap: the
+//   lightmap UVs (TEXCOORD_1) are kept, normal/ORM textures dropped (the game
+//   draws the lightmapped map unlit), and lightmap.png becomes
+//   map_lightmap.ktx2 (UASTC + Zstandard: smooth gradients band in ETC1S).
 // City kit: every piece merged into one library file (city_kit.glb) so
 //   shared textures and materials exist once; textures downsized and
 //   GPU-compressed to KTX2 (Basis Universal), which stays compressed in
@@ -28,6 +31,7 @@ import { ALL_EXTENSIONS } from '@gltf-transform/extensions';
 import { dedup, flatten, join, mergeDocuments, meshopt, prune, textureCompress, weld } from '@gltf-transform/functions';
 import { MeshoptEncoder, MeshoptDecoder } from 'meshoptimizer';
 import { ktx2 } from 'ktx2-encoder/gltf-transform';
+import { encodeToKTX2 } from 'ktx2-encoder';
 import sharp from 'sharp';
 
 const ROOT = process.cwd();
@@ -158,11 +162,21 @@ function textureTransforms() {
 }
 
 // The kit's COLOR_0 / TEXCOORD_1/2 are data for Quaternius's engine shaders.
-function stripEngineAttributes(doc) {
+// keep: semantics to leave alone (the baked map's TEXCOORD_1 is our lightmap UV).
+function stripEngineAttributes(doc, keep = []) {
   for (const mesh of doc.getRoot().listMeshes()) {
     for (const prim of mesh.listPrimitives()) {
-      for (const semantic of ['COLOR_0', 'TEXCOORD_1', 'TEXCOORD_2']) prim.setAttribute(semantic, null);
+      for (const semantic of ['COLOR_0', 'TEXCOORD_1', 'TEXCOORD_2']) {
+        if (!keep.includes(semantic)) prim.setAttribute(semantic, null);
+      }
     }
+  }
+}
+
+// The lightmapped map is drawn unlit, so lighting-only textures are dead weight.
+function dropLightingTextures(doc) {
+  for (const material of doc.getRoot().listMaterials()) {
+    material.setNormalTexture(null).setMetallicRoughnessTexture(null).setOcclusionTexture(null);
   }
 }
 
@@ -171,24 +185,48 @@ async function buildMap() {
   const collisionSrc = path.join(BLENDER_OUT, 'map_collision.glb');
   if (!fs.existsSync(visualSrc)) return;
 
+  const meta = JSON.parse(fs.readFileSync(path.join(OUT, 'map_meta.json'), 'utf8'));
+  const lightmapSrc = path.join(BLENDER_OUT, 'lightmap.png');
+  const baked = !!meta.lightmap && fs.existsSync(lightmapSrc);
+
   const visual = await io.read(visualSrc);
-  stripEngineAttributes(visual);
+  stripEngineAttributes(visual, baked ? ['TEXCOORD_1'] : []);
+  if (baked) dropLightingTextures(visual);
   await visual.transform(
     dedup(),
     flatten(), // bake the building hierarchy into world space...
     join({ keepNamed: false }), // ...so everything sharing a material merges into one draw call
-    prune(),
+    // keepAttributes: no material references the lightmap UVs (the game adds
+    // the lightmap), and prune would drop them as unused.
+    prune({ keepAttributes: baked }),
     ...textureTransforms(),
     // The map spans ~260 m: 16-bit positions keep ~4 mm precision (14-bit would crack seams).
     meshopt({ encoder: MeshoptEncoder, level: 'medium', quantizePosition: 16, quantizeTexcoord: 14 }),
   );
   await write(visual, path.join(OUT, 'map.glb'), fs.statSync(visualSrc).size);
 
+  const lightmapOut = path.join(OUT, 'map_lightmap.ktx2');
+  if (baked) {
+    const ktx = await encodeToKTX2(new Uint8Array(fs.readFileSync(lightmapSrc)), {
+      isUASTC: true, needSupercompression: true, isPerceptual: true, generateMipmap: true, imageDecoder,
+    });
+    fs.writeFileSync(lightmapOut, ktx);
+    report.push([path.relative(ROOT, lightmapOut), fs.statSync(lightmapSrc).size, ktx.length]);
+  } else if (fs.existsSync(lightmapOut)) {
+    fs.rmSync(lightmapOut);
+  }
+
   const collision = await io.read(collisionSrc);
-  for (const mesh of collision.getRoot().listMeshes()) {
+  // Player-only collision (COLP_* objects: window blockers that bullets pass
+  // through) is tagged with a "PlayerOnly" material, so join() keeps it apart
+  // and world.js can tell it from the rest.
+  const playerOnly = collision.createMaterial('PlayerOnly');
+  for (const node of collision.getRoot().listNodes()) {
+    const mesh = node.getMesh();
+    if (!mesh) continue;
     for (const prim of mesh.listPrimitives()) {
       for (const semantic of prim.listSemantics()) if (semantic !== 'POSITION') prim.setAttribute(semantic, null);
-      prim.setMaterial(null);
+      prim.setMaterial(node.getName().startsWith('COLP_') ? playerOnly : null);
     }
   }
   await collision.transform(flatten(), join({ keepNamed: false }), weld(), prune(),

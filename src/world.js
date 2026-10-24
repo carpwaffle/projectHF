@@ -3,6 +3,7 @@
 //
 // Used by every client for its own movement and by the host for hit
 // detection, so everyone collides against exactly the same geometry.
+// Collision tagged "PlayerOnly" (window blockers) stops players, not bullets.
 
 import * as THREE from 'three';
 import { MeshBVH } from 'three-mesh-bvh';
@@ -22,10 +23,11 @@ const ray = new THREE.Ray();
 
 export class World {
   // collision: an Object3D whose meshes are the collision geometry.
-  // meta: { spawns: [[x,y,z]...], playRadius }
+  // meta: { spawns: [[x,y,z,yaw?]...], teamSpawns: [[...], [...]], playRadius }
   constructor(collision, meta) {
     collision.updateMatrixWorld(true);
     const chunks = [];
+    const bulletChunks = [];
     collision.traverse((o) => {
       if (!o.isMesh) return;
       // Dequantize into plain floats in world space (meshopt-quantized
@@ -39,17 +41,12 @@ export class World {
         out.set([v.x, v.y, v.z], i * 3);
       }
       chunks.push(out);
+      if (o.material?.name !== 'PlayerOnly') bulletChunks.push(out);
     });
-    const positions = new Float32Array(chunks.reduce((n, c) => n + c.length, 0));
-    let offset = 0;
-    for (const c of chunks) {
-      positions.set(c, offset);
-      offset += c.length;
-    }
-    this.geometry = new THREE.BufferGeometry();
-    this.geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-    this.bvh = new MeshBVH(this.geometry);
+    this.bvh = buildBVH(chunks); // movement
+    this.bulletBvh = buildBVH(bulletChunks); // shooting
     this.spawns = meta.spawns;
+    this.teamSpawns = meta.teamSpawns ?? [meta.spawns, meta.spawns];
     this.playRadius = meta.playRadius;
   }
 
@@ -138,7 +135,19 @@ export class World {
   raycast(origin, direction, maxDist) {
     ray.origin.set(...origin);
     ray.direction.set(...direction);
-    const hit = this.bvh.raycastFirst(ray, THREE.DoubleSide, 0, maxDist);
+    const hit = this.bulletBvh.raycastFirst(ray, THREE.DoubleSide, 0, maxDist);
     return hit ? Math.min(hit.distance, maxDist) : maxDist;
   }
+}
+
+function buildBVH(chunks) {
+  const positions = new Float32Array(chunks.reduce((n, c) => n + c.length, 0));
+  let offset = 0;
+  for (const c of chunks) {
+    positions.set(c, offset);
+    offset += c.length;
+  }
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  return new MeshBVH(geometry);
 }

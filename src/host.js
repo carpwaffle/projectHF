@@ -4,7 +4,7 @@
 // are delivered by direct function call instead of over WebRTC.
 
 import {
-  SNAPSHOT_RATE, MAX_HP, DAMAGE, FIRE_COOLDOWN, RESPAWN_TIME, EYE_HEIGHT, MAX_RANGE,
+  SNAPSHOT_RATE, MAX_HP, DAMAGE, FIRE_COOLDOWN, RESPAWN_TIME, EYE_HEIGHT, MAX_RANGE, TEAMS,
   pickSpawn, lookDir, playerAABB, rayAABB,
 } from './shared.js';
 import { SKINS } from './assets.js';
@@ -54,13 +54,15 @@ export class HostServer {
 
   addPlayer(id, name) {
     if (this.players.has(id)) return;
-    const others = [...this.players.values()].filter((p) => !p.dead).map((p) => p.pos);
+    const team = this.pickTeam();
+    const spawn = this.spawnPoint(team, id);
     const player = {
       id,
       name: String(name || 'Player').slice(0, 16),
       skin: this.pickSkin(),
-      pos: pickSpawn(this.world.spawns, others),
-      yaw: 0,
+      team,
+      pos: spawn.pos,
+      yaw: spawn.yaw ?? 0,
       pitch: 0,
       hp: MAX_HP,
       score: 0,
@@ -69,8 +71,24 @@ export class HostServer {
       lastShot: 0,
     };
     this.players.set(id, player);
-    this.sendTo(id, { t: 'welcome', id, pos: player.pos });
-    this.broadcast({ t: 'feed', text: `${player.name} joined` });
+    this.sendTo(id, { t: 'welcome', id, pos: player.pos, yaw: spawn.yaw, team });
+    this.broadcast({ t: 'feed', text: `${player.name} joined ${TEAMS[team].name}` });
+  }
+
+  // The team with fewer players (random on a tie).
+  pickTeam() {
+    const counts = [0, 0];
+    for (const p of this.players.values()) counts[p.team] += 1;
+    if (counts[0] !== counts[1]) return counts[0] < counts[1] ? 0 : 1;
+    return Math.random() < 0.5 ? 0 : 1;
+  }
+
+  // One of the team's base spawns, away from other living players:
+  // { pos, yaw } (yaw undefined if the map doesn't give the spawn a facing).
+  spawnPoint(team, id) {
+    const others = [...this.players.values()].filter((p) => p.id !== id && !p.dead).map((p) => p.pos);
+    const [x, y, z, yaw] = pickSpawn(this.world.teamSpawns[team], others);
+    return { pos: [x, y, z], yaw };
   }
 
   // Random character model, avoiding ones already in use while any are free.
@@ -130,7 +148,7 @@ export class HostServer {
     let dist = this.world.raycast(origin, dir, MAX_RANGE);
     let victim = null;
     for (const p of this.players.values()) {
-      if (p === shooter || p.dead) continue;
+      if (p.team === shooter.team || p.dead) continue; // bullets pass through teammates
       const box = playerAABB(p.pos);
       const t = rayAABB(origin, dir, box.min, box.max);
       if (t < dist) { dist = t; victim = p; }
@@ -159,11 +177,11 @@ export class HostServer {
 
     for (const p of this.players.values()) {
       if (p.dead && now >= p.respawnAt) {
-        const others = [...this.players.values()].filter((o) => o !== p && !o.dead).map((o) => o.pos);
-        p.pos = pickSpawn(this.world.spawns, others);
+        const spawn = this.spawnPoint(p.team, p.id);
+        p.pos = spawn.pos;
         p.hp = MAX_HP;
         p.dead = false;
-        this.sendTo(p.id, { t: 'respawn', pos: p.pos });
+        this.sendTo(p.id, { t: 'respawn', pos: p.pos, yaw: spawn.yaw });
       }
     }
 
@@ -173,6 +191,7 @@ export class HostServer {
         id: p.id,
         name: p.name,
         skin: p.skin,
+        team: p.team,
         p: p.pos.map(round),
         yaw: round(p.yaw),
         pitch: round(p.pitch),

@@ -1,6 +1,7 @@
 // Loads the optimised GLB models produced by `npm run build:assets`
 // (meshopt-compressed geometry/animation, KTX2 textures).
 
+import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { KTX2Loader } from 'three/addons/loaders/KTX2Loader.js';
 import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
@@ -20,20 +21,23 @@ export const assets = {
 };
 
 let loader = null;
+let ktx2Loader = null;
 let loading = null;
 
 // The KTX2 transcoder picks a GPU texture format the device supports, so it
 // needs the WebGLRenderer.
 function getLoader(webglRenderer) {
   if (!loader) {
-    const ktx2 = new KTX2Loader().setTranscoderPath(BASIS_TRANSCODER).detectSupport(webglRenderer);
-    loader = new GLTFLoader().setMeshoptDecoder(MeshoptDecoder).setKTX2Loader(ktx2);
+    ktx2Loader = new KTX2Loader().setTranscoderPath(BASIS_TRANSCODER).detectSupport(webglRenderer);
+    loader = new GLTFLoader().setMeshoptDecoder(MeshoptDecoder).setKTX2Loader(ktx2Loader);
   }
   return loader;
 }
 
+const modelUrl = (path) => new URL(`../assets/models/${path}`, import.meta.url).href;
+
 function load(webglRenderer, path) {
-  return getLoader(webglRenderer).loadAsync(new URL(`../assets/models/${path}`, import.meta.url).href);
+  return getLoader(webglRenderer).loadAsync(modelUrl(path));
 }
 
 // Characters, animations and the rifle.
@@ -55,14 +59,25 @@ export function loadAssets(webglRenderer) {
   return loading;
 }
 
-// The map: visual scene, collision scene and metadata (spawns, play radius).
+// The map: visual scene, collision scene, metadata (spawns, play radius,
+// lightmap info) and the baked lightmap texture (null if the map wasn't baked).
 export async function loadMap(webglRenderer) {
-  const [visual, collision, meta] = await Promise.all([
+  const meta = await fetch(modelUrl('map_meta.json')).then((r) => r.json());
+  const [visual, collision, lightmap] = await Promise.all([
     load(webglRenderer, 'map.glb'),
     load(webglRenderer, 'map_collision.glb'),
-    fetch(new URL('../assets/models/map_meta.json', import.meta.url)).then((r) => r.json()),
+    meta.lightmap ? loadLightmap(webglRenderer, meta.lightmap.file) : null,
   ]);
-  return { visual: visual.scene, collision: collision.scene, meta };
+  return { visual: visual.scene, collision: collision.scene, meta, lightmap };
+}
+
+async function loadLightmap(webglRenderer, file) {
+  getLoader(webglRenderer);
+  const texture = await ktx2Loader.loadAsync(modelUrl(file));
+  texture.colorSpace = THREE.SRGBColorSpace; // stored sRGB-encoded (see tools/export_map.py)
+  texture.channel = 1; // the map's second UV set (TEXCOORD_1)
+  texture.anisotropy = 4;
+  return texture;
 }
 
 // The Downtown City kit: one root object per piece, keyed by piece name.

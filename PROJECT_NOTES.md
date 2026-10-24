@@ -188,8 +188,20 @@ STUN only, **no TURN server**.
 
 ## 7. Current status
 
+*(Updated 2026-10-25.)*
+
 ✅ **Working:** hosting, joining by room code, and both players seeing each
 other, on one machine in Chrome via `http://localhost:8080`.
+
+✅ **Game:** two teams (Blue north base House01, Red south base House09),
+no friendly fire, team scores; animated Quaternius characters with
+retargeted rifle animations.
+
+✅ **Map:** the v2 Downtown layout from the user's blueprint (§14):
+symmetric, ring of facades, 8 enterable buildings (all stairs verified to
+their top floors, roofs reachable on House02/05/08 and twins), windows per
+the user's specs (jump-through rule), baked lightmap lighting (§15).
+The repo is on GitHub: https://github.com/rkdgkssmreo/projectHF
 
 **Testing locally:** open `http://localhost:8080` (not `127.0.0.1` or the LAN
 IP) in both browsers and reload them after code changes.
@@ -221,6 +233,16 @@ IP) in both browsers and reload them after code changes.
    open them.
 4. Optionally self-host the signaling server (`peerjs-server`).
 
+**Map / visuals:**
+
+- Remaining enterable-building details: House04/12 (the user was going
+  through the buildings one by one); which other roofs are reachable
+- Characters don't darken indoors (tint by the lightmap under them)
+- Stair railings on upper floors; interior restyle (brick interiors, dark
+  ceilings); sidewalk kerb stripes
+- Real mouse/keyboard play-test of the new map
+- Lightmap: 4096 for sharper shadows if wanted
+
 **Gameplay and netcode:**
 
 - Leave-game button and a "host left" screen
@@ -233,7 +255,6 @@ IP) in both browsers and reload them after code changes.
 
 **Housekeeping:**
 
-- `git init` and a first commit
 - Test in Safari and Firefox
 
 ## 10. Procedural character animation (2026-10-22, since replaced by §11)
@@ -470,3 +491,226 @@ here on.
   handles both).
 - Only desktop movement tested via scripts; real mouse/keyboard play-test
   still to do.
+
+## 14. Map v2 from the user's blueprint, and team mode (2026-10-25)
+
+The user drew `maps/blueprint_base_2.png` over the base image; the generator
+was rewritten to build exactly that layout (the v1 map is kept in
+`maps/downtown_v1.blend`, the v1 generator in git history).
+
+### Layout (point-symmetric: every building has a twin rotated 180°)
+
+| Feature | Details |
+|---|---|
+| Roads | Cross of 16 m roads (asphalt) with 4 m raised sidewalks; the four blocks between them are raised to sidewalk height (0.15 m) |
+| Boundary | No wall. Players are clamped to r = 48.5 m (client physics and host); the game draws a transparent white ring over the ground that fades from clear at the boundary to white 16 m beyond (1 draw call) |
+| House08 (centre) | Octagon, 6 m sides (14.5 m across, adjusted from 12 m to fit the 2 m pieces), 5F, enterable, doors NW + SE. Switchback stairwell in the middle (two 2 m lanes, landings at both ends) up to the top floor (12.15 m). Low cover on each floor |
+| House01 / House09 | Team bases. West wing 2F, **2nd-floor bridge over the road** (no ground floor; 3 m headroom), east wing 2F, east end 1F, annex 1F. Doors, interior walls with doorways, cover on the bridge. 4 team spawns upstairs in the east wing |
+| House02 / House10 | 3F + 2F halves, enterable; switchback stairs to the 3rd floor |
+| House05 / House13 | 4F, 8 m square at 45°, enterable; switchback stairs to the top floor |
+| House04 / House12 | 1F, 8 m square at 45° (squared off), enterable, 2 doors |
+| 03/11, 06/14, 07/15 | Solid 1–2F |
+| Cover | 8 chest-high (1.2 m) concrete walls, 4 × 1 m, on the roads |
+
+Roofs are not reachable yet (the user will choose which ones later).
+
+### Generator changes (`tools/map_generator.py`)
+
+- `Building` takes `parts`: per-cell base/top floors, so one building can mix
+  1F, 2F and 3F parts and bridges. Walls, corners and parapets are worked
+  out per floor; bridges get a concrete underside.
+- `twin()` makes the 180° copy with the same random window choices (per-building RNG).
+- `Octagon` class for House08.
+- Stair rule learned in testing: a flight needs a **free cell in front of
+  its bottom** (ramp sides are too tall to step onto), and every flight
+  ends with a **1 m flat top step**, so players reach full height even when the
+  flight ends at a wall. Tops are exited sideways onto the floor beside them.
+- Ground: block/sidewalk polygons are clipped to the circle (Sutherland-Hodgman).
+- Empties carry `floors` / `enterable`; spawns carry `team`.
+  `export_map.py` writes `teamSpawns` to `map_meta.json`; `make_blueprint.py`
+  uses the properties (and colours spawns by team).
+
+Result: 14 draw calls, 140k triangles, 5.9 MB map; collision 76 KB.
+
+### Team mode
+
+- `TEAMS` in `shared.js` (0 Blue, 1 Red). The host puts each joiner on the
+  smaller team, spawns them at their team's spawns (`world.teamSpawns`, the one
+  furthest from other players), and ignores teammates in hit detection
+  (bullets pass through them). Snapshots and `welcome` carry `team`.
+- Clients: name labels in team colour, "You are Blue/Red" in the room info,
+  team score (sum of kills) at the top centre, scoreboard grouped by team, no
+  local hit tracers on teammates.
+
+### Verified in Chrome
+
+- Scripted walks on the collision mesh, through every enterable building:
+  octagon to 12.15 m; House05/13 to 9.15 m; House02/10 to 6.15 m; House01/09
+  door → stairs → across the bridge → spawn room → down the other stairs →
+  out; House04 through both doors; the road under both bridges; the boundary clamp
+  (stops at exactly 48.5 m).
+- Host + joiner in two tabs: host Blue in the north base, joiner Red in the
+  south base, both see the other's team.
+- Screenshots: bridge from the road, white fade at the boundary, octagon
+  top floor, overview.
+
+### Ideas / known issues
+
+- Roof access: to be specified per building.
+- Still no stair railings; sidewalk kerbs show the trim sheet's stripes from above.
+- Real mouse/keyboard play-test still to do.
+
+### Variant tried right after (2026-10-25)
+
+To see how it plays, three changes:
+1. The 8 road cover walls are **3 m tall** (one storey), no longer chest-high.
+2. The white boundary fade was **removed** and the **ring of facades is back**
+   (26 segments, r ~49.5 m, tall collision behind). Opposite segments are
+   built the same, so the ring is symmetric too.
+3. **Enterable buildings have no windows**, only doors (solid buildings still
+   have glass windows). Triangles dropped to 105k (the window pieces were the
+   detailed ones), 14 draw calls, 5.3 MB.
+
+Re-verified with the scripted walks (all stairs to the top floors, both
+bases, House04 doors) and screenshots.
+
+### House08 changes + window rule (2026-10-25)
+
+- **Entrances** (NW, SE): concrete frames 5 m wide × 2.6 m tall, filling
+  almost the whole 6 m side (the kit's doors are only 2 m).
+- **Roof access**: a 5th flight continues the switchback through the roof
+  (15.15 m). The roof has 1 m railings round the opening (open on the arrival
+  side), and the parapet now has collision.
+- **Windows on the 4th and 5th floors**, all 8 sides: concrete frames with a
+  5 m wide opening from a 0.8 m sill up to the ceiling (2.8 m).
+- **Window rule** (`WINDOW_SILL` 0.8 m, `WINDOW_MIN_WIDTH` 0.9 m): players
+  can't walk over anything above ~0.15 m, and indoors the ceiling caps a
+  jump at ~1.0 m, so a 0.8 m sill means "jump through". Kit window
+  openings (if used in enterable buildings again) that are too narrow, or
+  whose sill is lower, get **player-only collision** (`COLP_*` objects). The
+  optimiser tags them with a `PlayerOnly` material and `world.js` builds two
+  BVHs: movement uses everything, bullets ignore `PlayerOnly`. (The earlier
+  fall-through was kit windows with near-floor sills.)
+- Verified: scripted walk to the roof; walking through the entrance 2 m
+  off-centre; walking into a 4F window stops at the sill, jumping goes
+  through (and drops to the road); the roof railing blocks from the side; a
+  ray from the 4F passes out the window to the ring (49 m); a synthetic
+  `PlayerOnly` wall stops a player but not a ray. Screenshots of all three.
+
+### House02 / House10 changes (2026-10-25)
+
+- Stairwell moved to the middle rows of the 3F half (rows 7/8), leaving the
+  north and south rows free for windows.
+- 3rd-floor door (east wall of the 3F half) onto the 2F half's roof; an
+  outside stair (4 cells, 0.8 m half-width) along the roof's north edge climbs
+  to the 3F roof (gap left in that roof's parapet).
+- Wide windows (concrete frames across 2 wall cells, 0.8 m sill to the
+  ceiling), as the user specified them **for House10**: 2F half: north on
+  both floors and south on the 2nd floor. 3F half: north on the 2nd and 3rd
+  floors, south on the 3rd floor. House02 is the 180° twin, so its windows
+  are the other way round (in the generator they're written for House02,
+  with N and S swapped). Note for future requests: check which twin the
+  user's directions refer to.
+- Generator: `Building` gained `windows`, per-floor doors `(i, j, side,
+  floor)`, `roof_gaps`, optional stair half-width; enterable buildings'
+  parapets now have collision (their roofs are walkable). `wall_frame()` is
+  shared with House08.
+- Verified: scripted route ground → 3rd floor → roof door → 2F roof → roof
+  stair → 3F roof (9.15 m), for both twins; walking into each window kind stops at
+  the sill, jumping goes through; the parapet stops a walk off the 2F roof.
+
+### House02/10 windows narrower; House05/13 windows + roof (2026-10-25)
+
+- House02/10 wide windows: posts 0.3 → 0.6 m, so the opening is 2.8 m wide
+  instead of 3.4 m (height unchanged: anything below the ceiling would stop a
+  1.8 m player jumping through).
+- House05/13: two medium windows (1-cell frames, 1.5 m openings, in the end
+  cells) on every wall except the one facing the ring (local N: NW for
+  House05, SE for House13), on the 2nd-4th floors.
+- House05/13 roof: a 4th flight continues the switchback through the roof
+  (12.15 m); 1 m railings round the roof opening, open at the west end where
+  the stairs arrive. Roof tiles are now skipped over stair holes.
+- Generator: windows take an optional post width (default 0.6); `railings`
+  parameter.
+- Verified for both twins: route door → roof; rays show windows exactly on
+  floors 2-4 of the three inner walls; the ring-facing wall and the 1st
+  floor are solid; window sill stop + jump-through; the railing stops a walk into the
+  opening.
+
+### House01 / House09 windows (2026-10-25, directions given for House01)
+
+- West wing, 2nd floor, west wall: 2-cell window (3.4 m opening) with a
+  **0.6 m sill** (easy to jump out). Windows can now take their own sill.
+- Bridge: 4 medium windows (1.5 m) on each of the north and south walls, at
+  x = -9, -3, 3, 9.
+- East 2F wing: medium window west on the 1st floor (y 28-30, onto the road
+  under the bridge) and south on the 2nd floor (x 20-22, by the stair landing).
+- Far east 1F: medium window south (x 30-32).
+- Verified on both twins with rays (windows exactly there, walls between),
+  sill stop/jump through on the west window, jumping out of a bridge window
+  down to the road, and the full base route (door → stairs → bridge → spawn
+  room → stairs → out).
+
+### Spawns moved to the ground floor (2026-10-25)
+
+- Team spawns are on the **ground floor** of the base's east wing (same x/y
+  as before, clear of the stairs along the south wall).
+- Spawns now have a **facing**: the empty's rotation about Z (players face
+  its local +Y). `export_map.py` writes `[x, y, z, yaw]`; the host sends `yaw`
+  with `welcome`/`respawn`; spawns without one still face the centre. The
+  base spawns face the window onto the road under the bridge (west for Blue,
+  east for Red), because facing the centre meant staring at the back of the stairs.
+- Verified: all 8 spawns settle on the floor (h 0.15) without being pushed;
+  host (Red) and joiner (Blue) both spawn downstairs facing the window.
+
+## 15. Lighting: tone mapping + baked lightmap (2026-10-25)
+
+### Step 1: runtime light tune (`src/render.js`)
+
+Neutral tone mapping (exposure 1.15), brighter/warmer hemisphere + sun,
+lighter sky and fog (0xb7d6f2, 80-190 m). These dynamic lights now light the
+characters and rifle (and the map only when it isn't baked).
+
+### Step 2: baked lightmap
+
+Pipeline (`npm run build:map`, ~1.5 min on an M1 Max; `build:map:fast` skips it):
+1. `tools/export_map.py`, in memory (the .blend is untouched): copy every
+   Visual mesh into world space, strip extra UVs/colours, join into one
+   mesh `Map`.
+2. Lightmap UVs: Smart UV Project + `pack_islands`. ~35,000 islands (kit
+   pieces split into many), so padding is 1 px (8 px overflowed the 0-1
+   square: UVs reached 12 and almost nothing baked); a 4 px bake margin
+   fills the gaps. Ground outside the ring at 1/10 resolution. The ground
+   was split in the generator into the road cross (`Ground`) and the outside
+   annulus (`GroundOuter`), since a 130 m disc mostly hidden under blocks
+   wasted the atlas.
+3. Cycles DIFFUSE bake (direct + indirect, no colour), 2048², 256 samples,
+   sun from the same direction as the game's sun (strength 8, 1.5° soft
+   edge) + sky (1.8). **Every face gets one plain grey material for the
+   bake**: the kit's materials baked black (side walls 100% zero:
+   packed ORM, glass, fake-interior shaders); lighting-only is what a
+   lightmap should hold anyway.
+4. Post: auto-exposure (98th percentile → 1.9), 3x3 blur against noise
+   (stays inside the island margins), +0.16 ambient, stored sRGB-encoded as
+   value / 2.5 (`LM_MAX`) → `build/blender/lightmap.png`.
+5. `optimize_assets.mjs`: keeps TEXCOORD_1 (needs `prune({keepAttributes})`,
+   otherwise it's dropped as unused), drops normal/ORM textures (unused
+   unlit), encodes `map_lightmap.ktx2` (UASTC + zstd, mipmaps).
+6. Game: `loadMap` loads the KTX2 (sRGB, channel 1); `Renderer.setMap`
+   swaps the map's materials for `MeshBasicMaterial` (texture × lightmap ×
+   LM_MAX × π; basic divides lightmaps by π).
+
+Result: map 3.4 MB + lightmap 3.6 MB (was 5.3 MB total; the normal/ORM
+textures are gone), map 9 draw calls (was 14), ~4-16 MB GPU for the
+lightmap depending on the transcode target. Unlit materials are cheaper per
+pixel than the old lit ones.
+
+### Known limits / knobs
+
+- Characters aren't affected by the bake (no darkening indoors). Cheap fix
+  for later: tint characters by the lightmap value under their feet.
+- ~7-8 texels/m: soft shadows. `LM_SIZE = 4096` for sharper (4x GPU memory,
+  ~4x bake time).
+- Enclosed rooms (e.g. the spawn room) are dim: raise `LM_AMBIENT`, or add
+  windows.
+- Every layout change needs a re-bake (`npm run build:map`).

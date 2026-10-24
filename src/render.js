@@ -7,17 +7,23 @@ export class Renderer {
   constructor(canvas) {
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    // Tone mapping lets bright light stay bright without washing out colour.
+    this.renderer.toneMapping = THREE.NeutralToneMapping;
+    this.renderer.toneMappingExposure = 1.15;
     this.scene = new THREE.Scene();
-    this.scene.background = new THREE.Color(0xa9c9e8);
-    this.scene.fog = new THREE.Fog(0xa9c9e8, 70, 180);
+    this.scene.background = new THREE.Color(0xb7d6f2);
+    this.scene.fog = new THREE.Fog(0xb7d6f2, 80, 190);
 
     this.camera = new THREE.PerspectiveCamera(75, 1, 0.05, 200);
     this.camera.rotation.order = 'YXZ';
     this.scene.add(this.camera);
 
-    // Simple dynamic lighting until the map gets baked lightmaps.
-    this.scene.add(new THREE.HemisphereLight(0xdfeeff, 0x5a5048, 1.6));
-    const sun = new THREE.DirectionalLight(0xfff1dd, 2.2);
+    // Dynamic lights: they light the characters and the first-person rifle,
+    // and the map too when it has no baked lightmap. The baked map is drawn
+    // unlit (see setMap); the sun here points the same way as the baked sun
+    // (tools/export_map.py).
+    this.scene.add(new THREE.HemisphereLight(0xeaf3ff, 0x8a7a66, 2.0));
+    const sun = new THREE.DirectionalLight(0xffe6c4, 2.6);
     sun.position.set(30, 50, 20);
     this.scene.add(sun);
 
@@ -34,7 +40,29 @@ export class Renderer {
     resize();
   }
 
-  setMap(visual) {
+  // lightmap: the baked lighting (or null); intensity: its LM_MAX scale.
+  setMap(visual, lightmap = null, intensity = 1) {
+    if (lightmap) {
+      // Baked lighting replaces dynamic lighting on the map: unlit materials
+      // (cheaper than lit ones) showing texture x lightmap. MeshBasicMaterial
+      // divides the lightmap by pi, hence the factor.
+      visual.traverse((o) => {
+        if (!o.isMesh) return;
+        const old = o.material;
+        o.material = new THREE.MeshBasicMaterial({
+          name: old.name,
+          map: old.map,
+          color: old.color,
+          lightMap: lightmap,
+          lightMapIntensity: intensity * Math.PI,
+          transparent: old.transparent,
+          opacity: old.opacity,
+          alphaTest: old.alphaTest,
+          side: old.side,
+        });
+        old.dispose();
+      });
+    }
     this.scene.add(visual);
   }
 
@@ -53,18 +81,18 @@ export class Renderer {
 
   // ---- avatars -----------------------------------------------------------
 
-  ensureAvatar(id, name, skin) {
+  ensureAvatar(id, name, skin, team) {
     let avatar = this.avatars.get(id);
     if (avatar) return avatar;
-    avatar = new Character(name, skin);
+    avatar = new Character(name, skin, team);
     this.scene.add(avatar.object);
     this.avatars.set(id, avatar);
     return avatar;
   }
 
   // state: { pos, yaw, pitch, dead }
-  updateAvatar(id, name, skin, state, dt) {
-    this.ensureAvatar(id, name, skin).update(dt, state);
+  updateAvatar(id, name, skin, team, state, dt) {
+    this.ensureAvatar(id, name, skin, team).update(dt, state);
   }
 
   avatarFired(id) {
@@ -141,4 +169,5 @@ export class Renderer {
     this.renderer.render(this.scene, this.camera);
   }
 }
+
 

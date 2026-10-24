@@ -8,6 +8,7 @@
     "build:assets": "/Applications/Blender.app/Contents/MacOS/Blender -b --factory-startup -noaudio --python tools/convert_assets.py && node tools/optimize_assets.mjs",
     "optimize:assets": "node tools/optimize_assets.mjs",
     "build:map": "/Applications/Blender.app/Contents/MacOS/Blender -b maps/downtown.blend -noaudio --python tools/export_map.py && node tools/optimize_assets.mjs --map-only",
+    "build:map:fast": "/Applications/Blender.app/Contents/MacOS/Blender -b maps/downtown.blend -noaudio --python tools/export_map.py -- --no-bake && node tools/optimize_assets.mjs --map-only",
     "blueprint": "/Applications/Blender.app/Contents/MacOS/Blender -b maps/downtown.blend -noaudio --python tools/make_blueprint.py && node tools/make_blueprint.mjs"
   },
   "devDependencies": {

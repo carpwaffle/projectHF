@@ -34,7 +34,7 @@ for obj in bpy.data.collections['Collision'].all_objects:
     obj.hide_render = True
 # Hide the ground and sidewalk slabs: buildings read best on white.
 for obj in bpy.data.collections['Visual'].objects:
-    if obj.name == 'Ground' or obj.name.startswith('Plot_'):
+    if obj.name.startswith('Ground') or obj.name.startswith('Plot_'):
         obj.hide_render = True
 
 cam_data = bpy.data.cameras.new('BlueprintCam')
@@ -101,24 +101,17 @@ for empty in bpy.data.collections['Buildings'].objects:
     if not kids:
         continue
     pts = [o.matrix_world @ v.co for o in kids if not o.name.endswith('_Generated') for v in list(o.data.vertices)[::7]]
-    xs, ys, zs = [p.x for p in pts], [p.y for p in pts], [p.z for p in pts]
-    floors = max(1, round((max(zs) - PLOT_H - 1.0) / FLOOR_H))
-    enterable = empty.name in ('Centre', 'Quadrant')
-    roof = any(o.name.endswith('_Generated') for o in kids) and not enterable
-    tag = f'{floors}F' + (' · enterable' if enterable else '') + (' · roof stairs' if roof else '')
+    xs, ys = [p.x for p in pts], [p.y for p in pts]
+    floors = int(empty.get('floors', 1))
+    enterable = bool(empty.get('enterable', False))
+    tag = f'{floors}F' + (' · enterable' if enterable else '')
     bx, by = (min(xs) + max(xs)) / 2, (min(ys) + max(ys)) / 2
-    if empty.name == 'Quadrant':
-        bx, by = 26, 16  # label the long wing, not the courtyard
     labels.append({'name': empty.name, 'tag': tag, 'x': round(bx, 1), 'y': round(by, 1)})
     lx, ly = px(bx, by)
-    size = 30 if enterable else 20
+    size = 26 if enterable else 20
     for (y, text, s) in ((ly - 4, empty.name.replace('_', ' '), size), (ly + size * 0.85, tag, size * 0.75)):
         svg.append(f'<text x="{lx}" y="{y}" font-size="{s:.0f}" font-weight="bold" text-anchor="middle" '
                    f'fill="#111" stroke="white" stroke-width="5" paint-order="stroke">{text}</text>')
-
-# Courtyard label.
-qx, qy = px(32, 32)
-svg.append(f'<text x="{qx}" y="{qy}" font-size="26" font-style="italic" text-anchor="middle" fill="#333" stroke="white" stroke-width="5" paint-order="stroke">courtyard</text>')
 
 # Spawns.
 spawns = []
@@ -126,14 +119,15 @@ for obj in sorted(bpy.data.collections['Spawns'].objects, key=lambda o: o.name):
     x, y, _ = obj.matrix_world.translation
     spawns.append([round(x, 1), round(y, 1)])
     sx, sy = px(x, y)
-    svg.append(f'<g stroke="#0a9a3a" stroke-width="4"><line x1="{sx - 10}" y1="{sy - 10}" x2="{sx + 10}" y2="{sy + 10}"/>'
+    colour = '#1e5ac8' if obj.get('team', 0) == 0 else '#d03030'
+    svg.append(f'<g stroke="{colour}" stroke-width="4"><line x1="{sx - 10}" y1="{sy - 10}" x2="{sx + 10}" y2="{sy + 10}"/>'
                f'<line x1="{sx - 10}" y1="{sy + 10}" x2="{sx + 10}" y2="{sy - 10}"/></g>')
 
 # Title, scale, north arrow, legend.
 svg.append(f'<text x="{MARGIN}" y="40" font-size="30" font-weight="bold" fill="#111">Downtown map · top view · 1 small square = 2 m (one wall piece) · numbers = metres from the centre</text>')
 nx, ny = W - MARGIN - 70, MARGIN + 90
 svg.append(f'<g transform="translate({nx},{ny})"><polygon points="0,-55 18,0 -18,0" fill="#111"/><text y="40" font-size="34" font-weight="bold" text-anchor="middle">N</text></g>')
-legend = [('#0a9a3a', 'X  spawn point'), ('rgba(220,40,40,0.9)', '- - -  play boundary (outer wall)'), ('#111', 'nF = storeys')]
+legend = [('#1e5ac8', 'X  Blue team spawn'), ('#d03030', 'X  Red team spawn'), ('rgba(220,40,40,0.9)', '- - -  play boundary (ring of facades)'), ('#111', 'nF = storeys')]
 for k, (colour, text) in enumerate(legend):
     svg.append(f'<text x="{MARGIN + 20}" y="{W - MARGIN - 20 - 34 * (len(legend) - 1 - k)}" font-size="26" fill="{colour}" '
                f'stroke="white" stroke-width="5" paint-order="stroke">{text}</text>')

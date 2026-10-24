@@ -4,7 +4,7 @@
 
 import {
   STATE_SEND_RATE, INTERP_DELAY, EYE_HEIGHT, FIRE_COOLDOWN, MAX_HP, MOVE_SPEED,
-  MAX_RANGE, lookDir, playerAABB, rayAABB,
+  MAX_RANGE, TEAMS, lookDir, playerAABB, rayAABB,
 } from './shared.js';
 import { makeRoomCode, openHostPeer, joinRoom } from './net.js';
 import { HostServer, HOST_ID } from './host.js';
@@ -25,7 +25,7 @@ let world;
 try {
   const [, map] = await Promise.all([loadAssets(renderer.renderer), loadMap(renderer.renderer)]);
   world = new World(map.collision, map.meta);
-  renderer.setMap(map.visual);
+  renderer.setMap(map.visual, map.lightmap, map.meta.lightmap?.intensity);
 } catch (err) {
   $('status').textContent = `Could not load models: ${err.message}`;
   throw err;
@@ -39,6 +39,8 @@ $('joinBtn').disabled = false;
 
 let session = null; // { send(msg, reliable), close(), code, isHost }
 let myId = null;
+let myTeam = 0;
+let roomLabel = '';
 const me = { pos: [0, 0, 0], vel: [0, 0, 0], onGround: true, yaw: 0, pitch: 0, hp: MAX_HP, dead: false };
 let snapshots = []; // [{ time, players: Map<id, playerState> }]
 let latestPlayers = []; // most recent snapshot array, for the scoreboard
@@ -91,7 +93,9 @@ function onMessage(msg) {
   switch (msg.t) {
     case 'welcome':
       myId = msg.id;
-      teleport(msg.pos);
+      myTeam = msg.team ?? 0;
+      showRoomInfo();
+      teleport(msg.pos, msg.yaw);
       break;
     case 'snap': {
       const players = new Map(msg.players.map((p) => [p.id, p]));
@@ -119,7 +123,7 @@ function onMessage(msg) {
       }
       break;
     case 'respawn':
-      teleport(msg.pos);
+      teleport(msg.pos, msg.yaw);
       me.hp = MAX_HP;
       me.dead = false;
       break;
@@ -132,11 +136,11 @@ function onMessage(msg) {
   }
 }
 
-function teleport(pos) {
+// yaw: the spawn's facing from the map; without one, face the arena centre.
+function teleport(pos, yaw) {
   me.pos = [...pos];
   me.vel = [0, 0, 0];
-  // Face the arena centre.
-  me.yaw = Math.atan2(pos[0], pos[2]);
+  me.yaw = yaw ?? Math.atan2(pos[0], pos[2]);
   me.pitch = 0;
 }
 
@@ -152,7 +156,7 @@ function tryShoot(now) {
   const dir = lookDir(me.yaw, me.pitch);
   let dist = world.raycast(origin, dir, MAX_RANGE);
   for (const [id, avatar] of renderer.avatars) {
-    if (avatar.dead || id === myId) continue;
+    if (avatar.dead || id === myId || avatar.team === myTeam) continue;
     const box = playerAABB(avatar.object.position.toArray());
     dist = Math.min(dist, rayAABB(origin, dir, box.min, box.max));
   }
@@ -194,7 +198,7 @@ function renderRemotePlayers(now, dt) {
     let pa = a.players.get(id) ?? pb;
     // Don't slide across the map when someone respawns.
     if (Math.hypot(pb.p[0] - pa.p[0], pb.p[2] - pa.p[2]) > 3) pa = pb;
-    renderer.updateAvatar(id, pb.name, pb.skin, {
+    renderer.updateAvatar(id, pb.name, pb.skin, pb.team, {
       pos: [0, 1, 2].map((i) => pa.p[i] + (pb.p[i] - pa.p[i]) * t),
       yaw: lerpAngle(pa.yaw, pb.yaw, t),
       pitch: pa.pitch + (pb.pitch - pa.pitch) * t,
@@ -220,21 +224,42 @@ function addFeed(text) {
   setTimeout(() => div.remove(), 5000);
 }
 
+// Team score = the team's total kills.
 function updateScoreboard() {
+  const totals = TEAMS.map((_, t) => latestPlayers.filter((p) => p.team === t).reduce((n, p) => n + p.score, 0));
+  const teamScore = $('teamScore');
+  teamScore.replaceChildren();
+  TEAMS.forEach((team, t) => {
+    const span = document.createElement('span');
+    span.textContent = `${team.name} ${totals[t]}`;
+    span.style.color = team.color;
+    if (t === myTeam) span.className = 'mine';
+    teamScore.appendChild(span);
+  });
+
   const table = $('scoreboard');
   table.replaceChildren();
   const header = table.insertRow();
-  for (const h of ['Player', 'Kills']) {
+  for (const h of ['Team', 'Player', 'Kills']) {
     const th = document.createElement('th');
     th.textContent = h;
     header.appendChild(th);
   }
-  for (const p of [...latestPlayers].sort((x, y) => y.score - x.score)) {
+  for (const p of [...latestPlayers].sort((x, y) => x.team - y.team || y.score - x.score)) {
     const row = table.insertRow();
     if (p.id === myId) row.className = 'me';
+    const team = row.insertCell();
+    team.textContent = TEAMS[p.team]?.name ?? '';
+    team.style.color = TEAMS[p.team]?.color ?? '';
     row.insertCell().textContent = p.name;
     row.insertCell().textContent = p.score;
   }
+}
+
+function showRoomInfo() {
+  const info = $('roomInfo');
+  info.textContent = myId ? `${roomLabel} · You are ${TEAMS[myTeam].name}` : roomLabel;
+  info.style.borderLeft = myId ? `4px solid ${TEAMS[myTeam].color}` : '';
 }
 
 function updateHud() {
@@ -310,9 +335,8 @@ function enterGame(code, isHost) {
   $('menu').hidden = true;
   $('hud').hidden = false;
   setStatus('');
-  $('roomInfo').textContent = isHost
-    ? `Hosting · Room code: ${code} · share it with friends`
-    : `Room ${code}`;
+  roomLabel = isHost ? `Hosting · Room code: ${code} · share it with friends` : `Room ${code}`;
+  showRoomInfo(); // (the host's own welcome has already arrived)
   requestLock();
 }
 
@@ -323,6 +347,7 @@ function leaveGame(reason) {
   myId = null;
   snapshots = [];
   latestPlayers = [];
+  $('teamScore').replaceChildren();
   me.dead = false;
   me.hp = MAX_HP;
   renderer.clearAvatars();

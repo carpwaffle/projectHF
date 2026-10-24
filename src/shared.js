@@ -12,6 +12,13 @@ export const MOVE_SPEED = 7;
 export const JUMP_SPEED = 7;
 export const GRAVITY = 20;
 
+// Two teams: team 0 spawns in the north base (House01), team 1 in the south
+// base (House09). No friendly fire.
+export const TEAMS = [
+  { name: 'Blue', color: '#4c8dff' },
+  { name: 'Red', color: '#ff5a4c' },
+];
+
 export const MAX_HP = 100;
 export const DAMAGE = 25;
 export const FIRE_COOLDOWN = 0.15; // seconds
