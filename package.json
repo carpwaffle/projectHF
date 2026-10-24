@@ -1,0 +1,21 @@
+{
+  "name": "hack-fps",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "npx --yes serve -l 8080 .",
+    "build:assets": "/Applications/Blender.app/Contents/MacOS/Blender -b --factory-startup -noaudio --python tools/convert_assets.py && node tools/optimize_assets.mjs",
+    "optimize:assets": "node tools/optimize_assets.mjs",
+    "build:map": "/Applications/Blender.app/Contents/MacOS/Blender -b maps/downtown.blend -noaudio --python tools/export_map.py && node tools/optimize_assets.mjs --map-only",
+    "blueprint": "/Applications/Blender.app/Contents/MacOS/Blender -b maps/downtown.blend -noaudio --python tools/make_blueprint.py && node tools/make_blueprint.mjs"
+  },
+  "devDependencies": {
+    "@gltf-transform/core": "^4.5.1",
+    "@gltf-transform/extensions": "^4.5.1",
+    "@gltf-transform/functions": "^4.5.1",
+    "ktx2-encoder": "^0.6.0",
+    "meshoptimizer": "^1.3.0",
+    "sharp": "^0.35.5"
+  }
+}

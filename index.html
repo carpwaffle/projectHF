@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Hack FPS</title>
+  <link rel="stylesheet" href="style.css" />
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/",
+        "three-mesh-bvh": "https://cdn.jsdelivr.net/npm/three-mesh-bvh@0.9.16/build/index.module.js",
+        "peerjs": "https://cdn.jsdelivr.net/npm/peerjs@1.5.4/+esm"
+      }
+    }
+  </script>
+</head>
+<body>
+  <canvas id="view"></canvas>
+
+  <div id="menu" class="overlay">
+    <div class="panel">
+      <h1>HACK FPS</h1>
+      <label>Name <input id="name" maxlength="16" placeholder="Player" /></label>
+      <button id="hostBtn">Host Game</button>
+      <div class="row">
+        <input id="codeInput" maxlength="5" placeholder="ROOM CODE" />
+        <button id="joinBtn">Join</button>
+      </div>
+      <p id="status"></p>
+      <p class="help">WASD move · Space jump · Mouse aim · Click shoot · Tab scores · Esc release mouse</p>
+    </div>
+  </div>
+
+  <div id="hud" hidden>
+    <div id="crosshair"></div>
+    <div id="hitmarker"></div>
+    <div id="damage"></div>
+    <div id="roomInfo"></div>
+    <div id="killfeed"></div>
+    <div id="hp">100</div>
+    <div id="deadMsg" hidden>You died — respawning…</div>
+    <div id="clickToPlay">Click to play</div>
+    <table id="scoreboard" hidden></table>
+  </div>
+
+  <script type="module" src="src/main.js"></script>
+</body>
+</html>

@@ -1,0 +1,33 @@
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; overflow: hidden; background: #000; font-family: system-ui, sans-serif; color: #fff; }
+#view { display: block; width: 100vw; height: 100vh; }
+
+.overlay { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; background: rgba(0, 0, 0, 0.6); }
+.overlay[hidden] { display: none; }
+.panel { width: min(360px, calc(100vw - 32px)); display: flex; flex-direction: column; gap: 12px; padding: 24px; background: #15181d; border: 1px solid #333; border-radius: 8px; }
+.panel h1 { margin: 0 0 8px; text-align: center; letter-spacing: 4px; }
+.panel label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: #aaa; }
+.panel input, .panel button { font: inherit; padding: 10px; border-radius: 4px; border: 1px solid #444; background: #0d0f12; color: #fff; }
+.panel button { background: #2d6cdf; border-color: #2d6cdf; cursor: pointer; font-weight: 600; }
+.panel button:disabled { opacity: 0.5; cursor: default; }
+.panel .row { display: flex; gap: 8px; }
+.panel .row input { flex: 1; text-transform: uppercase; letter-spacing: 3px; min-width: 0; }
+#status { min-height: 1.2em; margin: 0; color: #f0c040; font-size: 14px; }
+.help { margin: 0; font-size: 12px; color: #777; }
+
+#hud { position: fixed; inset: 0; pointer-events: none; }
+#crosshair { position: absolute; left: 50%; top: 50%; width: 4px; height: 4px; margin: -2px; background: #fff; border-radius: 50%; box-shadow: 0 0 2px #000; }
+#hitmarker { position: absolute; left: 50%; top: 50%; width: 20px; height: 20px; margin: -10px; border: 2px solid #ff4040; transform: rotate(45deg); opacity: 0; transition: opacity 0.15s; }
+#hitmarker.show { opacity: 1; transition: none; }
+#damage { position: absolute; inset: 0; box-shadow: inset 0 0 120px rgba(255, 0, 0, 0.8); opacity: 0; transition: opacity 0.4s; }
+#damage.show { opacity: 1; transition: none; }
+#roomInfo { position: absolute; top: 12px; left: 12px; font-size: 14px; background: rgba(0, 0, 0, 0.5); padding: 6px 10px; border-radius: 4px; }
+#killfeed { position: absolute; top: 12px; right: 12px; display: flex; flex-direction: column; gap: 4px; align-items: flex-end; font-size: 14px; }
+#killfeed div { background: rgba(0, 0, 0, 0.5); padding: 4px 8px; border-radius: 4px; }
+#hp { position: absolute; bottom: 20px; left: 20px; font-size: 36px; font-weight: 700; text-shadow: 0 0 4px #000; }
+#hp::before { content: "HP "; font-size: 16px; color: #aaa; }
+#deadMsg { position: absolute; top: 40%; width: 100%; text-align: center; font-size: 28px; text-shadow: 0 0 6px #000; }
+#clickToPlay { position: absolute; top: 60%; width: 100%; text-align: center; font-size: 18px; color: #ccc; }
+#scoreboard { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); border-collapse: collapse; background: rgba(0, 0, 0, 0.75); min-width: 280px; }
+#scoreboard td, #scoreboard th { padding: 6px 14px; text-align: left; }
+#scoreboard tr.me { color: #f0c040; }
