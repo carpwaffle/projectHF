@@ -292,17 +292,28 @@ async function buildCityKit() {
 
 // --map-only: just the map (used by `npm run build:map` after editing the .blend).
 // --lightmap-only: just re-encode the lightmap (`npm run build:lightmap`).
+// --guns: just the weapons.
 const LIGHTMAP_ONLY = process.argv.includes('--lightmap-only');
-if (!process.argv.includes('--map-only') && !LIGHTMAP_ONLY) {
-  for (const f of fs.readdirSync(path.join(BLENDER_OUT, 'characters'))) {
-    if (f.endsWith('.glb')) await optimizeMesh(path.join('characters', f));
+const GUNS_ONLY = process.argv.includes('--guns');
+const GUNS = ['rifle.glb', 'sniper.glb', 'pistol.glb', 'revolver.glb', 'p90.glb', 'shotgun.glb'];
+if (GUNS_ONLY || process.argv.includes('--anims')) { // --anims: animations + guns
+  for (const f of GUNS) await optimizeMesh(f);
+  if (!GUNS_ONLY) {
+    await optimizeAnimations('anims_male.glb');
+    await optimizeAnimations('anims_female.glb');
   }
-  await optimizeMesh('rifle.glb');
-  await optimizeAnimations('anims_male.glb');
-  await optimizeAnimations('anims_female.glb');
-  await buildCityKit();
+} else {
+  if (!process.argv.includes('--map-only') && !LIGHTMAP_ONLY) {
+    for (const f of fs.readdirSync(path.join(BLENDER_OUT, 'characters'))) {
+      if (f.endsWith('.glb')) await optimizeMesh(path.join('characters', f));
+    }
+    for (const f of GUNS) await optimizeMesh(f);
+    await optimizeAnimations('anims_male.glb');
+    await optimizeAnimations('anims_female.glb');
+    await buildCityKit();
+  }
+  await buildMap();
 }
-await buildMap();
 
 let before = 0;
 let after = 0;

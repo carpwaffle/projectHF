@@ -205,13 +205,16 @@ def new_empty(cols, name, x, y, angle):
     return empty
 
 
+WALL_T = 0.2  # outside walls: a slab this thick, inside the building's outline
+
+
 def wall_collision(col, mesh_name, local, block=None):
     """Wall slab, with a hole where the piece has an opening. block: the
     player-only collision, which closes window holes players shouldn't fit
     through (too narrow) or could walk through (sill too low)."""
     hole = OPENINGS.get(mesh_name)
     if not hole:
-        col.box((-1, 0, 0), (1, 0.2, FLOOR_H), local)
+        col.box((-1, 0, 0), (1, WALL_T, FLOOR_H), local)
         return
     x0, x1, z0, z1 = hole
     col.box((-1, 0, 0), (x0, 0.2, FLOOR_H), local)
@@ -582,8 +585,13 @@ class Building:
             # Frame: origin at the start cell's back edge, +Y along the run.
             cx, cy = (i0 + 0.5) * CELL - di * CELL / 2, (j0 + 0.5) * CELL - dj * CELL / 2
             frame = Matrix.Translation((cx, cy, 0)) @ Matrix.Rotation(math.atan2(-di, dj), 4, 'Z')
-            stair_flight(vis, col, frame, len(cells) * CELL, PLOT_H + floor * FLOOR_H, top=1.0,
-                         half=half[0] if half else 0.95)
+            # A flight ending at an outside wall stops at the wall's inner face
+            # (the slab is WALL_T thick, inside the outline); otherwise its top
+            # pokes out through the wall.
+            il, jl = cells[-1]
+            at_wall = (il + di, jl + dj) not in self.cells
+            stair_flight(vis, col, frame, len(cells) * CELL - (WALL_T if at_wall else 0), PLOT_H + floor * FLOOR_H,
+                         top=1.0, half=half[0] if half else 0.95)
 
         # Interior walls with a doorway.
         for (axis, line, a, b, door, *floors) in self.partitions:
@@ -770,9 +778,10 @@ def north_buildings():
                 [(1, side, [(i, j)], 0.25) for side, j in (('N', 15), ('S', 12)) for i in (-5, -2, 1, 4)] +
                 [(0, 'W', [(6, 14)], 0.25), (1, 'S', [(10, 12)], 0.25), (0, 'S', [(15, 12)], 0.25)],
         rng_key='House01'))
-    # House02: 3F west half, 2F east half. Switchback stairs in the middle
-    # rows of the 3F half: up east in row 7, step across to row 8 at the top,
-    # up west in row 8. A 3rd-floor door opens onto the 2F half's roof, where
+    # House02: 3F west half, 2F east half. Switchback stairs in the 3F half:
+    # up east along the north wall (row 9; narrowed to clear the wall), step
+    # across to row 8 at the top, up west in row 8. (Row 7 blocked the view /
+    # way in from the south door.) A 3rd-floor door opens onto the 2F half's roof, where
     # an outside stair along the north edge climbs to the 3F roof.
     # Wide windows (the user specified them for House10, the twin, so here
     # north and south are swapped): 2F half south (both floors) and north
@@ -782,7 +791,7 @@ def north_buildings():
         [(rect_cells(12, 12, 20, 20), 0, 3), (rect_cells(20, 12, 30, 20), 0, 2)],
         'metal', True,
         doors={(12, 9, 'N'), (7, 6, 'S'), (9, 7, 'E', 2)},
-        stairs=[(0, [(7, 7), (8, 7), (9, 7)], (1, 0)),
+        stairs=[(0, [(7, 9), (8, 9), (9, 9)], (1, 0), 0.75),
                 (1, [(8, 8), (7, 8), (6, 8)], (-1, 0)),
                 (2, [(13, 9), (12, 9), (11, 9), (10, 9)], (-1, 0), 0.8)],
         windows=[(0, 'S', [(10, 6), (11, 6)]), (0, 'S', [(13, 6), (14, 6)]),

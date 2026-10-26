@@ -18,6 +18,7 @@ export const assets = {
   characters: {}, // skin name -> gltf scene
   clips: {}, // 'male' | 'female' -> { clipName: AnimationClip }
   rifle: null, // gltf scene
+  guns: {}, // weapon id -> gltf scene (all but the rifle are skinned: Magazine, Handle, Slide, Drum, Reload... bones)
 };
 
 let loader = null;
@@ -43,17 +44,19 @@ function load(webglRenderer, path) {
 // Characters, animations and the rifle.
 export function loadAssets(webglRenderer) {
   loading ??= (async () => {
-    const [characters, male, female, rifle] = await Promise.all([
+    const gunIds = ['rifle', 'sniper', 'pistol', 'revolver', 'p90', 'shotgun'];
+    const [characters, male, female, guns] = await Promise.all([
       Promise.all(SKINS.map((name) => load(webglRenderer, `characters/${name}.glb`))),
       load(webglRenderer, 'anims_male.glb'),
       load(webglRenderer, 'anims_female.glb'),
-      load(webglRenderer, 'rifle.glb'),
+      Promise.all(gunIds.map((id) => load(webglRenderer, `${id}.glb`))),
     ]);
     SKINS.forEach((name, i) => { assets.characters[name] = characters[i].scene; });
     for (const [gender, gltf] of [['male', male], ['female', female]]) {
       assets.clips[gender] = Object.fromEntries(gltf.animations.map((clip) => [clip.name, clip]));
     }
-    assets.rifle = rifle.scene;
+    assets.guns = Object.fromEntries(gunIds.map((id, i) => [id, guns[i].scene]));
+    assets.rifle = assets.guns.rifle;
     return assets;
   })();
   return loading;

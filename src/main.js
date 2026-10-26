@@ -3,8 +3,8 @@
 // the `send` function differs.
 
 import {
-  STATE_SEND_RATE, INTERP_DELAY, EYE_HEIGHT, FIRE_COOLDOWN, MAX_HP, MOVE_SPEED,
-  MAX_RANGE, TEAMS, MAG_SIZE, RELOAD_TIME, RESPAWN_TIME, SPAWN_PROTECTION,
+  STATE_SEND_RATE, INTERP_DELAY, EYE_HEIGHT, MAX_HP, MOVE_SPEED,
+  MAX_RANGE, TEAMS, WEAPONS, DEFAULT_WEAPON, SWITCH_TIME, RESPAWN_TIME, SPAWN_PROTECTION,
   lookDir, playerAABB, rayAABB, spreadFor, spreadDir,
 } from './shared.js';
 import { makeRoomCode, openHostPeer, joinRoom } from './net.js';
@@ -46,7 +46,11 @@ let myTeam = 0;
 let roomLabel = '';
 const me = {
   pos: [0, 0, 0], vel: [0, 0, 0], onGround: true, yaw: 0, pitch: 0, hp: MAX_HP, dead: false,
-  ammo: MAG_SIZE, reloadEnd: 0, // reloadEnd: performance.now() ms when the reload finishes, 0 = not reloading
+  weapon: DEFAULT_WEAPON, lastWeapon: WEAPONS.findIndex((w) => w.id === 'rifle'), // index into WEAPONS (Q: last weapon)
+  ammo: WEAPONS.map((w) => w.magSize), // per weapon
+  reloadEnd: 0, // performance.now() ms when the reload finishes, 0 = not reloading
+  switchEnd: 0, // performance.now() ms when the weapon switch finishes
+  scope: 0, // 0 = not scoped .. 1 = fully scoped
   spread: 0, // current shot spread (radians), follows movement
   protectedUntil: 0, // performance.now() ms; spawn protection (for the HUD; the host enforces it)
 };
@@ -62,19 +66,33 @@ let pendingTracers = []; // our shots this frame: drawn once the rifle is posed 
 
 const keys = new Set();
 let mouseDown = false;
+let triggerPressed = false; // a click since the last frame (semi-automatic weapons)
+let aimHeld = false; // right mouse button
 const locked = () => document.pointerLockElement === canvas;
+const weapon = () => WEAPONS[me.weapon];
+const BASE_FOV = renderer.camera.fov;
 
 window.addEventListener('keydown', (e) => {
   keys.add(e.code);
   if (e.code === 'Tab' && session) { e.preventDefault(); $('scoreboard').hidden = false; }
   if (e.code === 'KeyR' && session && locked()) startReload(performance.now());
   if (e.code === 'KeyM' && session) addFeed(toggleMute() ? 'Sound off (M)' : 'Sound on (M)');
+  if (session && locked()) {
+    const digit = /^Digit(\d)$/.exec(e.code);
+    if (digit && WEAPONS[digit[1] - 1]) switchWeapon(digit[1] - 1, performance.now());
+    if (e.code === 'KeyQ') switchWeapon(me.lastWeapon, performance.now());
+  }
 });
+window.addEventListener('wheel', (e) => {
+  if (!session || !locked() || Math.abs(e.deltaY) < 1) return;
+  switchWeapon((me.weapon + (e.deltaY > 0 ? 1 : WEAPONS.length - 1)) % WEAPONS.length, performance.now());
+});
+canvas.addEventListener('contextmenu', (e) => e.preventDefault());
 window.addEventListener('keyup', (e) => {
   keys.delete(e.code);
   if (e.code === 'Tab') $('scoreboard').hidden = true;
 });
-window.addEventListener('blur', () => { keys.clear(); mouseDown = false; });
+window.addEventListener('blur', () => { keys.clear(); mouseDown = false; aimHeld = false; });
 
 // Rejects when not triggered by a user gesture (e.g. after an await); the
 // "Click to play" prompt covers that case.
@@ -83,11 +101,19 @@ canvas.addEventListener('click', () => { if (session && !locked()) requestLock()
 document.addEventListener('pointerlockchange', () => { $('clickToPlay').hidden = locked(); });
 document.addEventListener('mousemove', (e) => {
   if (!locked()) return;
-  me.yaw -= e.movementX * 0.0022;
-  me.pitch = Math.max(-1.55, Math.min(1.55, me.pitch - e.movementY * 0.0022));
+  const sensitivity = 0.0022 * (renderer.camera.fov / BASE_FOV); // slower when zoomed in
+  me.yaw -= e.movementX * sensitivity;
+  me.pitch = Math.max(-1.55, Math.min(1.55, me.pitch - e.movementY * sensitivity));
 });
-document.addEventListener('mousedown', (e) => { if (locked() && e.button === 0) mouseDown = true; });
-document.addEventListener('mouseup', (e) => { if (e.button === 0) mouseDown = false; });
+document.addEventListener('mousedown', (e) => {
+  if (!locked()) return;
+  if (e.button === 0) { mouseDown = true; triggerPressed = true; }
+  if (e.button === 2) aimHeld = true;
+});
+document.addEventListener('mouseup', (e) => {
+  if (e.button === 0) mouseDown = false;
+  if (e.button === 2) aimHeld = false;
+});
 
 function readMoveInput() {
   const active = locked() && !me.dead;
@@ -129,8 +155,9 @@ function onMessage(msg) {
     }
     case 'shot':
       if (msg.from !== myId) { // (our own were drawn instantly)
-        const range = Math.hypot(...msg.e.map((e, i) => e - msg.o[i]));
-        renderer.remoteShot(msg.from, msg.o, msg.e, range < MAX_RANGE - 0.5);
+        const ends = msg.es ?? [msg.e];
+        const hit = (e) => Math.hypot(...e.map((v, i) => v - msg.o[i])) < MAX_RANGE - 0.5;
+        renderer.remoteShot(msg.from, msg.o, ends, ends.map(hit));
       }
       break;
     case 'hit':
@@ -154,8 +181,9 @@ function onMessage(msg) {
       me.dead = false;
       deathInfo = null;
       me.protectedUntil = performance.now() + SPAWN_PROTECTION * 1000;
-      me.ammo = MAG_SIZE;
+      me.ammo = WEAPONS.map((w) => w.magSize);
       me.reloadEnd = 0;
+      me.switchEnd = 0;
       break;
     case 'leave':
       renderer.removeAvatar(msg.id);
@@ -179,43 +207,76 @@ function teleport(pos, yaw) {
 // Ammo is predicted here for an instant HUD; the host keeps its own count
 // and ignores shots while reloading or empty.
 function startReload(now) {
-  if (me.dead || me.reloadEnd || me.ammo >= MAG_SIZE) return;
-  me.reloadEnd = now + RELOAD_TIME * 1000;
+  if (me.dead || me.reloadEnd || me.ammo[me.weapon] >= weapon().magSize) return;
+  me.reloadEnd = now + weapon().reloadTime * 1000;
   session.send({ t: 'reload' }, true);
 }
 
 function updateReload(now) {
   if (me.dead) me.reloadEnd = 0;
   if (me.reloadEnd && now >= me.reloadEnd) {
-    me.ammo = MAG_SIZE;
+    me.ammo[me.weapon] = weapon().magSize;
     me.reloadEnd = 0;
   }
-  renderer.reload = me.reloadEnd ? 1 - (me.reloadEnd - now) / (RELOAD_TIME * 1000) : -1;
+  renderer.reload = me.reloadEnd ? 1 - (me.reloadEnd - now) / (weapon().reloadTime * 1000) : -1;
+}
+
+// Every player carries all the weapons; switching cancels a reload, and the
+// new one can't fire until it's drawn (SWITCH_TIME). The host enforces both.
+function switchWeapon(index, now) {
+  if (me.dead || index === me.weapon || !WEAPONS[index]) return;
+  me.lastWeapon = me.weapon;
+  me.weapon = index;
+  me.reloadEnd = 0;
+  me.switchEnd = now + SWITCH_TIME * 1000;
+  me.scope = 0;
+  session.send({ t: 'weapon', w: index }, true);
+}
+
+// Scoping (weapons with a zoomFov): hold the right mouse button. Not while
+// reloading, switching or working the bolt (it scopes back in afterwards).
+const BOLT_BUSY = 0.75; // seconds after a sniper shot the bolt is being worked
+function updateScope(dt, now) {
+  const w = weapon();
+  const want = aimHeld && w.zoomFov && !me.dead && !me.reloadEnd && now >= me.switchEnd
+    && now - lastShotTime > BOLT_BUSY * 1000;
+  me.scope = want ? Math.min(1, me.scope + dt / w.scopeTime) : Math.max(0, me.scope - dt / 0.12);
+  const fov = w.zoomFov ? BASE_FOV + (w.zoomFov - BASE_FOV) * me.scope : BASE_FOV;
+  renderer.setFov(fov);
 }
 
 function tryShoot(now) {
-  if (!mouseDown || me.dead || !locked() || now - lastShotTime < FIRE_COOLDOWN * 1000) return;
+  const w = weapon();
+  const pulled = w.auto ? mouseDown : triggerPressed; // semi-automatic: one shot per click
+  triggerPressed = false;
+  if (!pulled || me.dead || !locked() || now - lastShotTime < w.cooldown * 1000 || now < me.switchEnd) return;
   if (me.reloadEnd) return;
-  if (me.ammo <= 0) return startReload(now); // pulling the trigger on empty reloads
+  if (me.ammo[me.weapon] <= 0) return startReload(now); // pulling the trigger on empty reloads
   lastShotTime = now;
-  me.ammo -= 1;
+  me.ammo[me.weapon] -= 1;
   me.protectedUntil = 0; // firing ends spawn protection
 
   // Draw the tracer immediately against what we currently see, so shooting
   // feels responsive. The host decides whether it actually hit. The spread
   // is applied here so the tracer shows where the shot really goes.
   const origin = [me.pos[0], me.pos[1] + EYE_HEIGHT, me.pos[2]];
-  const dir = spreadDir(lookDir(me.yaw, me.pitch), me.spread);
-  let dist = world.raycast(origin, dir, MAX_RANGE);
-  for (const [id, avatar] of renderer.avatars) {
-    if (avatar.dead || id === myId || avatar.team === myTeam) continue;
-    const box = playerAABB(avatar.object.position.toArray());
-    dist = Math.min(dist, rayAABB(origin, dir, box.min, box.max));
+  const aim = spreadDir(lookDir(me.yaw, me.pitch), me.spread);
+  // Shotgun: several pellets in a cone around the aimed direction.
+  const dirs = w.pellets ? Array.from({ length: w.pellets }, () => spreadDir(aim, w.pelletSpread)) : [aim];
+  for (const dir of dirs) {
+    let dist = world.raycast(origin, dir, MAX_RANGE);
+    for (const [id, avatar] of renderer.avatars) {
+      if (avatar.dead || id === myId || avatar.team === myTeam) continue;
+      const box = playerAABB(avatar.object.position.toArray());
+      dist = Math.min(dist, rayAABB(origin, dir, box.min, box.max));
+    }
+    pendingTracers.push({ end: origin.map((o, i) => o + dir[i] * dist), hit: dist < MAX_RANGE });
   }
-  pendingTracers.push({ end: origin.map((o, i) => o + dir[i] * dist), hit: dist < MAX_RANGE });
 
-  session.send({ t: 'shoot', yaw: me.yaw, pitch: me.pitch, d: dir }, true);
-  if (me.ammo === 0) startReload(now); // auto-reload when the magazine runs dry
+  session.send(w.pellets
+    ? { t: 'shoot', w: me.weapon, yaw: me.yaw, pitch: me.pitch, ds: dirs }
+    : { t: 'shoot', w: me.weapon, yaw: me.yaw, pitch: me.pitch, d: aim }, true);
+  if (me.ammo[me.weapon] === 0) startReload(now); // auto-reload when the magazine runs dry
 }
 
 // ---- remote player interpolation --------------------------------------------
@@ -265,6 +326,7 @@ function renderRemotePlayers(now, dt) {
       dead: pb.dead,
       reloading: !!pb.rl,
       protected: !!pb.sp,
+      weapon: pb.w ?? 0,
     }, dt);
   }
 }
@@ -371,16 +433,19 @@ function updateDamageDirs(now) {
 
 // Crosshair ticks spread apart to show the current shot spread.
 function updateCrosshair() {
-  const halfFov = THREE_FOV_HALF;
+  const halfFov = (renderer.camera.fov / 2) * (Math.PI / 180);
   const gap = 4 + (Math.tan(me.spread) / Math.tan(halfFov)) * (window.innerHeight / 2);
   $('crosshairTicks').style.setProperty('--gap', `${gap.toFixed(1)}px`);
 }
-const THREE_FOV_HALF = (renderer.camera.fov / 2) * (Math.PI / 180);
 
 function updateHud(now) {
   $('hp').textContent = me.hp;
-  $('ammoCount').textContent = me.ammo;
-  $('ammo').classList.toggle('empty', me.ammo === 0);
+  $('weaponName').textContent = WEAPONS.map((w, i) => (i === me.weapon ? `[${i + 1}] ${w.name}` : `${i + 1}`)).join('  ');
+  $('ammoCount').textContent = me.ammo[me.weapon];
+  $('magSize').textContent = weapon().magSize;
+  $('ammo').classList.toggle('empty', me.ammo[me.weapon] === 0);
+  $('scope').hidden = me.scope < 0.85;
+  $('crosshair').hidden = $('crosshairTicks').hidden = me.scope > 0.05;
   $('reloadMsg').hidden = !me.reloadEnd || me.dead;
 
   $('deadMsg').hidden = !me.dead;
@@ -415,6 +480,7 @@ function frame(now) {
   if (session && myId) {
     if (!me.dead) world.stepPlayer(me, readMoveInput(), dt);
     updateReload(now);
+    updateScope(dt, now);
     tryShoot(now);
 
     if (!me.dead && now - lastStateSent >= 1000 / STATE_SEND_RATE) {
@@ -424,7 +490,7 @@ function frame(now) {
 
     // Spread eases toward what the current movement allows.
     const speed = Math.hypot(me.vel[0], me.vel[2]);
-    me.spread += (spreadFor(speed, me.onGround) - me.spread) * (1 - Math.exp(-12 * dt));
+    me.spread += (spreadFor(weapon(), speed, me.onGround, me.scope > 0.95) - me.spread) * (1 - Math.exp(-12 * dt));
 
     renderRemotePlayers(now, dt);
     updateHud(now);
@@ -444,15 +510,18 @@ function frame(now) {
       dead: me.dead,
       reloading: !!me.reloadEnd,
       ground: me.onGround ? me.pos[1] : groundBelow(me.pos),
+      weapon: me.weapon,
+      hidden: me.scope > 0.85, // looking through the scope
       eye,
     });
     setListener(eye, lookDir(me.yaw, me.pitch));
     // Tracers start at the muzzle as it's drawn this frame, before the recoil
     // kick (applied from the next frame) lifts the rifle: otherwise the line
     // hangs ~5 cm above the muzzle while the rifle drops back.
-    for (const shot of pendingTracers) {
-      renderer.addTracer(renderer.localMuzzle(), shot.end, shot.hit);
-      renderer.kickGun();
+    if (pendingTracers.length) {
+      const muzzle = renderer.localMuzzle();
+      for (const shot of pendingTracers) renderer.addTracer(muzzle, shot.end, shot.hit);
+      renderer.kickGun(); // once per trigger pull (a shotgun's pellets are one shot)
     }
     pendingTracers = [];
     const move = !me.dead && me.onGround ? Math.hypot(me.vel[0], me.vel[2]) / MOVE_SPEED : 0;
@@ -514,8 +583,13 @@ function leaveGame(reason) {
   $('teamScore').replaceChildren();
   me.dead = false;
   me.hp = MAX_HP;
-  me.ammo = MAG_SIZE;
+  me.weapon = DEFAULT_WEAPON;
+  me.ammo = WEAPONS.map((w) => w.magSize);
   me.reloadEnd = 0;
+  me.switchEnd = 0;
+  me.scope = 0;
+  aimHeld = false;
+  renderer.setFov(BASE_FOV);
   renderer.reload = -1;
   renderer.clearAvatars();
   renderer.clearViewmodel();

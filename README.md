@@ -18,13 +18,26 @@ ES modules don't load from `file://`, so you need a local server. To play
 with friends over the internet, put these static files on any host, such as
 GitHub Pages, Netlify or itch.io.
 
-Controls: WASD move · Space jump · Mouse aim · Click shoot · R reload · M mute · Tab scoreboard · Esc release mouse.
+Controls: WASD move · Space jump · Mouse aim · Click shoot · R reload · 1-6 / Q / wheel switch weapon · Right mouse scope (sniper) · M mute · Tab scoreboard · Esc release mouse.
 
-The rifle holds 30 rounds; reloading takes 2.2 s (press R, or it reloads by
-itself when the magazine runs dry). Spare magazines are unlimited.
+Everyone carries all six weapons and spawns with the pistol:
+
+| Key | Weapon | Fire | Damage (body / head) | Rounds | Reload |
+|---|---|---|---|---|---|
+| 1 | Pistol | per click, 0.15 s | 30 / 75 | 12 | 1.6 s |
+| 2 | Revolver | per click, 0.35 s | 55 / 110 | 6 | 2.4 s |
+| 3 | Rifle | automatic, 0.15 s | 25 / 50 | 30 | 2.2 s |
+| 4 | P90 | automatic, 0.075 s | 17 / 34 | 50 | 2.5 s |
+| 5 | Shotgun | per click, pumped, 0.65 s | 8 pellets × 13 / 20, less with distance | 6 | 2.6 s |
+| 6 | Sniper | per click, bolt, 1 s; scope | 80 / 200 | 5 | 3 s | Switching
+takes 0.45 s and cancels a reload. Press R to reload, or it reloads by itself
+when the magazine runs dry. Spare magazines are unlimited. Weapon stats live in
+`WEAPONS` in `src/shared.js`.
 
 Headshots do double damage (2 to kill, 4 body shots). Shots spread more
-while moving and most in the air; the crosshair ticks show how much. After
+while moving and most in the air; the crosshair ticks show how much. Most
+to least accurate: sniper (a little more so scoped), revolver, pistol and
+rifle, P90, shotgun. After
 spawning you're protected for 3 s (a faint shield), until you fire. A red arc
 round the crosshair points at whoever hit you. Teammates' names show through
 walls; enemies' only when they're in sight.
@@ -128,6 +141,8 @@ A ring of facades closes the arena; the game also keeps players inside the
 | `fbx/` | Source FBX assets (characters, guns, Mixamo animations), all CC0 / Mixamo |
 | `tools/convert_assets.py` | Blender stage of the asset build (see Assets) |
 | `tools/optimize_assets.mjs` | Optimisation stage of the asset build (see Assets) |
+| `npm run build:guns` | Rebuild just the weapon models (all six) |
+| `npm run build:anims` | Rebuild the animations (rifle + pistol clips) and the weapons, not the characters |
 | `tools/map_generator.py` | Generates `maps/downtown.blend` from the layout in the script (`-- --force` overwrites) |
 | `tools/export_map.py` | Bakes the lighting and exports the `.blend` for the game (`npm run build:map`) |
 | `tools/make_blueprint.py`, `.mjs` | Top-down map image with a grid (`npm run blueprint`) |

@@ -46,6 +46,11 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #000; font-f
 #hp { position: absolute; bottom: 20px; left: 20px; font-size: 36px; font-weight: 700; text-shadow: 0 0 4px #000; }
 #hp::before { content: "HP "; font-size: 16px; color: #aaa; }
 #ammo { position: absolute; bottom: 20px; right: 20px; font-size: 20px; color: #ccc; text-shadow: 0 0 4px #000; }
+#weaponName { position: absolute; bottom: 64px; right: 20px; font-size: 14px; color: #ccc; text-shadow: 0 0 4px #000; white-space: pre; letter-spacing: 1px; }
+/* Sniper scope: black surround with a round lens and a thin crosshair. */
+#scope { position: absolute; inset: 0; background: radial-gradient(circle at 50% 50%, transparent 0, transparent 43vmin, rgba(0, 0, 0, 0.6) 44vmin, #000 45vmin); }
+#scope::before { content: ""; position: absolute; left: calc(50% - 44vmin); right: calc(50% - 44vmin); top: 50%; height: 1.5px; margin-top: -0.75px; background: rgba(0, 0, 0, 0.9); }
+#scope::after { content: ""; position: absolute; top: calc(50% - 44vmin); bottom: calc(50% - 44vmin); left: 50%; width: 1.5px; margin-left: -0.75px; background: rgba(0, 0, 0, 0.9); }
 #ammoCount { font-size: 36px; font-weight: 700; color: #fff; }
 #ammo.empty #ammoCount { color: #ff5a4c; }
 #reloadMsg { position: absolute; top: calc(50% + 28px); width: 100%; text-align: center; font-size: 16px; color: #ffe08a; text-shadow: 0 0 4px #000; letter-spacing: 1px; }

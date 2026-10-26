@@ -920,3 +920,185 @@ Knobs: `VOLUME`, `RANGE` (how far each carries), `PITCH_SPREAD`, the reload
   protected 3 s with the shield visible; labels: enemy hidden behind the
   octagon, teammate readable through it; spread 0.17° → 2° running → ~4°
   airborne, crosshair gap 5.7 → 23.7 → 43 px.
+
+## 21. Weapon system + sniper (2026-10-26)
+
+- **`WEAPONS`** (`shared.js`): per-weapon damage/headDamage, cooldown, auto
+  vs one-shot-per-click, magSize, reloadTime, spread (still/move/air; and
+  `scoped`), zoomFov, scopeTime. Rifle unchanged; sniper: 80 / 200 (headshot
+  kills), 1.3 s between shots (bolt), 5 rounds, 3 s reload, 1.7° hip-fire
+  spread, 0 scoped and still. `SWITCH_TIME` 0.45 s.
+- **Host**: per-player `weapon`, `ammo[]` per weapon, `switchEnd`; messages
+  `weapon {w}`, `shoot {w, d, ...}` (ignored if `w` isn't the current weapon:
+  fired before the switch arrived); snapshots carry `w`; `shot` carries `w`.
+- **Client**: 1 / 2 / Q (last weapon) / mouse wheel; semi-auto weapons fire
+  once per click; hold right mouse to scope (FOV 75° → 18° over 0.22 s, mouse
+  sensitivity scaled by FOV, arms/gun hidden, CSS scope overlay; not while
+  reloading, switching or for 0.9 s after a sniper shot = working the bolt);
+  HUD shows weapon slots and per-weapon ammo.
+- **Sniper model**: `convert_assets.py build_sniper()` keeps its skeleton
+  (Magazine, Handle = bolt). Gotchas fixed on the way: object transforms
+  didn't survive the glTF export, armature transforms must be applied in
+  object mode (edit mode overwrites them on exit), the FBX keys the armature
+  object (clear `animation_data`) and the pose must be refreshed
+  (`view_layer.update()`) before export. `npm run build:guns` (Blender
+  `-- --guns` + optimiser `--guns`); 27 KB.
+- **Character**: `setWeapon(id)` swaps the gun (per-gun points in `GUNS`:
+  leftGrip, muzzle, magGrab, boltAxis; measured from the model). Same holding
+  animations for both. Sniper **procedural reload**: the left hand follows
+  keyframed points (grip → magazine → pulled down → left-hip pouch → back →
+  insert → grip) via the existing two-bone IK, the gun tilts, the Magazine
+  bone follows the palm (hidden while the hand fetches a new one), then the
+  bolt is worked. **Bolt**: the Handle bone turns ~70° about the bore, slides
+  back 5 cm and returns, 0.15 s after each shot over 0.75 s.
+- **Audio**: sniper shot = the recorded gunshot at 0.78 pitch, louder,
+  carrying further, + synthesised bolt back/forward; reload timings per
+  weapon (`RELOAD_TIMING`).
+- Verified: switching (client, host, HUD), sniper first person, scope (FOV 18,
+  overlay, arms hidden), shot → ammo 4/5 both sides; bolt handle moves (1.2
+  rad, 3.4 cm); procedural reload frames from both sides (magazine out in
+  the hand, hand at the hip pouch, inserting) with IK hitting every target
+  (< 3 mm); host: sniper body 100→20, shot inside the bolt cycle ignored,
+  headshot kills, rifle shot during the draw ignored, wrong-weapon shot
+  ignored; rifle reload still the clip version; both weapons reload
+  independently; preview page fine.
+- Not done: scope glint for other players; picture-in-picture scope (would
+  need a second render).
+
+## 22. Pistol (2026-10-26)
+
+Mixamo pistol clips from the user (`fbx/Character Animation/Pistol`: Idle,
+Run Forward/Backward, Strafe Left/Right, Firing, Jump, Death = the rifle's).
+- **Conversion** (`convert_assets.py`, `PISTOL_CLIPS` → `pistol_*` clips in
+  `anims_*.glb`): the single **Jump** clip is split by frame range into
+  `pistol_jump_up` (1-8), `pistol_jump_loop` (8-10, the apex) and
+  `pistol_jump_down` (17-25) with the hips' vertical movement removed
+  (`retarget(frames=, lock_height=)`; the physics moves the body).
+  `npm run build:anims` = animations + guns, without the characters.
+- **Model**: `Pistol.fbx` keeps its skeleton (Slide, Magazine, Trigger);
+  modelled along +X, so `build_skinned_gun(..., turn)` rotates it. 0.21 m,
+  23 KB.
+- **Weapon**: 30 / 75 damage (4 body / 2 head to kill), one shot per click,
+  0.2 s, 12 rounds, 1.6 s reload, spread 0.23° still / 1° moving / 2.9° air;
+  key 3. Shot sound: the recorded gunshot at 1.3 pitch, quieter, shorter range.
+- **Animation sets** (`SETS`): the rifle set (long guns) and the pistol set;
+  `pistolBlend` cross-fades them on switching; the grip is calibrated per set
+  from that set's idle (`gripOffsets[gender][set]`, per-gun `rightGrip`).
+- **Run-firing (made)**: the pistol Firing clip on the upper body only
+  (`pistol_fire`, weight 12), restarted each shot and held 0.5 s: adds the
+  kick standing, and raises the arms into the firing pose while running.
+- **Reload / run-reload (made, procedural)**: the sniper's reload code became
+  generic (`GUNS[id].reload`: path, magOld/magNew, down, tilt, bolt or
+  rack). Pistol path: magazine out of the grip, hip pouch, new magazine in,
+  then the left hand racks the slide (Slide bone back 3 cm with the hand,
+  released). Upper body only, so it's the same while running.
+- **Slide** kicks back 3 cm and returns over 0.09 s with every shot.
+- First person: per-style camera offsets (`VIEW_EYE.rifle / pistol`, blended).
+- Verified: switching (HUD `[3] Pistol 12/12`), third-person stance
+  (two-handed, level), jogging vs jogging + firing, reload frames (magazine
+  out 20%, hand at the pouch 41%, slide racked 86% = 2.6 cm), host: body −30,
+  shot inside 0.2 s ignored, headshot −75; per-weapon ammo across all three
+  on client and host; no console errors.
+
+## 23. All six guns: revolver, P90, shotgun; keys 1-6 (2026-10-26)
+
+- **Order = keys = network index**: 1 pistol, 2 revolver, 3 rifle, 4 P90,
+  5 shotgun, 6 sniper (`WEAPONS`); everyone spawns with the rifle
+  (`DEFAULT_WEAPON`). Nothing indexes weapons by number any more
+  (`weaponIndex(id)`).
+- **Models** (`build_skinned_gun`): revolver 0.3 m (Drum, Hammer, Trigger,
+  and a speedloader `Quick` + `Bullets_1` parked beside the gun), P90 0.52 m
+  (Magazine on top; its materials are just Material.00x, renamed to
+  P90Body/Metal/Mag for colours), shotgun 1.0 m (`Reload` = the pump,
+  `Bullet` = a shell).
+- **Stats**: revolver 55/110, 0.5 s, 6, 2.4 s; P90 17/34 automatic 0.075 s,
+  50, 2.5 s; shotgun 8 pellets × 13/20 in a 4° cone (+ movement spread),
+  damage falling from 8 m to 30% at 30 m (`shotDamage`), pumped 0.9 s, 6,
+  2.6 s (full reload).
+- **Pellets**: the shooter sends `ds` (one direction per pellet; the host
+  rejects the wrong count), the host traces each, adds damage per victim
+  (`applyHit`), broadcasts one `shot` with `es` (all ends); every pellet
+  draws a tracer.
+- **Procedural reloads** generalised: per gun, `part` (+`partAlso`) bones
+  held in the hand in `held` windows, `hidden` windows, `hideOutside`
+  (shown only in the hand), `slide` (magazines slide out/in), `extra`
+  named points. Revolver: drum swings out 3 cm, gun tips up (empties out),
+  speedloader from the hip into the drum, drum closes. P90: magazine lifted up
+  and back off the top, new one on. Shotgun: four hip → loading-port trips
+  with a shell in the hand, then the pump. **Shotgun pump** after every shot
+  (`Reload` bone 8 cm back; the left hand rides on it).
+- **Sounds**: per-weapon shot table (`SHOTS`: pitch, loudness, range, bolt /
+  pump sounds after) and reload timings.
+- Verified: keys 1-6 switch (client, host, HUD, ammo 12/6/30/50/6/5); the
+  three new guns held correctly in third person; reload mechanics measured
+  frozen (revolver drum 3 cm, speedloader at the hip pouch and at the drum,
+  P90 magazine 13-16 cm off, shotgun shell in hand / pump 8 cm; IK within
+  2 cm); shotgun damage averages 100 at 4 m, 53 at 10 m, 39 at 15 m, 2 at
+  28 m; wrong pellet count rejected.
+
+## 24. Shooting animation fixes (2026-10-27)
+
+- **Pistol firing bent the character over and yanked the hands back**: the
+  upper-body overlay used the Mixamo pistol Firing clip, which itself leans
+  the torso, drops the hands and has a big recoil. The overlay is now the
+  pistol idle's upright two-handed aim (held 0.5 s after a shot, fading),
+  for the pistol and revolver; the kick is the small procedural one.
+- **Gun tipped up when moving backward** (all guns): the gun followed the
+  right hand's angle in each clip, and the run-backward clips tip the hand
+  back. `aimGun` now turns the gun about its grip so it points exactly along
+  the view (yaw, pitch + recoil); reload tilts / bolt stay on top; fades
+  with death; skipped while the rifle's reload clip turns the rifle.
+- Verified on a bot: gun vs aim direction 0.0° still / running backward,
+  firing or not, pistol and rifle; pistol hands move 3 cm when firing
+  (was a big pull-back); torso upright while firing.
+- **Follow-up: hands drifted left (pistol run-firing) and guns dropped when
+  moving backward.** The upright aim overlay only sets the upper body's
+  rotations, which over the running hips turned the arms to the left; the
+  run-backward clips hold the hands lower. `holdGun`: right-arm two-bone IK
+  holds the gun's grip where each set's idle stance holds it (`gripRest`,
+  measured with the grip calibration), turned up/down with the aim about the
+  right shoulder; blended with pistol/rifle, off when dead or during the
+  rifle's reload clip. Then `aimGun` points the gun. Measured: grip height and
+  side within 2 mm standing / forward / backward / strafing, firing or not
+  (pistol 141 cm, 4 cm right; rifle and shotgun 134 cm, 14.5 cm right).
+  Side effect: the running clips no longer bob the gun.
+- **Follow-up 2: the gun shifted on the body with movement direction.**
+  Pinned to the character root, but the clips move the chest (up to 7 cm
+  lower, 9 cm forward, 25° twist depending on direction), so the gun slid
+  around the body. `holdGun` now keeps the idle-stance grip relative to the
+  chest: follows the chest's position (sampled after the clips, before the
+  aim bends the spine) fully and its twist half (`CHEST_TWIST_FOLLOW`).
+  Measured grip-from-chest: height and depth within 1-3 cm in all
+  directions; side 11-18 cm (rifle, from the half twist); pistol 7-9 cm.
+
+## 25. Spawn with the pistol; faster semi-automatics (2026-10-27)
+
+- `DEFAULT_WEAPON` = pistol (Q's "last weapon" starts as the rifle).
+- Cooldowns: pistol 0.2 → 0.15 s, revolver 0.5 → 0.35, shotgun 0.9 → 0.65,
+  sniper 1.3 → 1.0. To fit: sniper bolt 0.6 s (+0.15 delay; scope blocked
+  0.75 s), shotgun pump 0.42 s (+0.12), their bolt / pump sounds earlier.
+
+## 26. Revolver parts; House02/10 stairs (2026-10-27)
+
+- **Revolver speedloader floating beside the gun**: the model weights every
+  part half to the root bone (`Control`) and half to its own bone, so
+  hiding the speedloader (bone scaled to zero) left a half-size copy, and the
+  drum only swung half as far. `rigid_parts` (convert_assets.py) makes each
+  vertex follow only its part when the part's weight is at least the root's
+  (applied to all skinned guns; the others had a few such vertices too).
+  The speedloader now only shows in the hand during the reload.
+- **House02/10 ground-floor stair** moved from the middle row (it rose right
+  behind the south door) to the north wall (row 9, half width 0.75 to clear
+  the wall), then the same switchback in row 8 (twin: mirrored).
+- **Stairs poking out of outside walls**: flights ran to the building
+  outline, but the wall slab is `WALL_T` (0.2 m) inside it. A flight ending
+  at an outside wall now stops at the wall's inner face (all buildings).
+
+## 27. Accuracy order (2026-10-27)
+
+Spread (cone half-angle, radians; standing / running / in the air), most to
+least accurate: sniper 0.001 / 0.015 / 0.04 (scoped 0 / 0.008 / 0.04; was
+0.03 unscoped, i.e. only accurate scoped), revolver 0.002 / 0.02 / 0.045,
+pistol = rifle 0.01 / 0.03 / 0.07 (the P90's old values), P90 0.014 / 0.04 /
+0.08, shotgun unchanged (0 / 0.02 / 0.05 plus its 0.07 pellet cone). At 30 m
+standing: sniper within 3 cm, revolver 6 cm, pistol / rifle 30 cm, P90 42 cm.

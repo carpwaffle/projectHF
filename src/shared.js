@@ -20,18 +20,68 @@ export const TEAMS = [
 ];
 
 export const MAX_HP = 100;
-export const DAMAGE = 25; // body shot: 4 to kill
-export const HEAD_DAMAGE = 50; // headshot: 2 to kill
 export const SPAWN_PROTECTION = 3; // seconds of invulnerability after spawning (ends early when you fire)
 
-// Shot spread: half-angle (radians) of the cone shots land in. Nearly
-// pinpoint standing still, wider while moving, widest in the air.
-export const SPREAD_STILL = 0.003;
-export const SPREAD_MOVE = 0.035; // at full running speed
-export const SPREAD_AIR = 0.07;
-export const FIRE_COOLDOWN = 0.15; // seconds
-export const MAG_SIZE = 30; // rounds per magazine (spare magazines are unlimited)
-export const RELOAD_TIME = 2.2; // seconds
+// Weapons (index = the number sent over the network, and key 1-6). Every
+// player carries all of them; switch with the number keys, Q (last weapon)
+// or the mouse wheel. Everyone spawns with DEFAULT_WEAPON.
+//   cooldown: seconds between shots (incl. working a bolt / pump)
+//   auto: keeps firing while the trigger is held (otherwise one shot per click)
+//   spread: half-angle (radians) of the cone shots land in, standing still /
+//     at full running speed / in the air; `scoped` replaces it while scoped
+//   zoomFov: vertical field of view when scoped (degrees)
+//   pellets: shots per trigger pull (shotgun), each in a cone of pelletSpread
+//     around the aimed (spread) direction, each doing damage / headDamage,
+//     falling off between falloff[0] and [1] metres to falloff[2] of it
+export const WEAPONS = [
+  {
+    id: 'pistol', name: 'Pistol', damage: 30, headDamage: 75, cooldown: 0.15, auto: false,
+    magSize: 12, reloadTime: 1.6,
+    spread: { still: 0.01, move: 0.03, air: 0.07 }, // (same as the rifle)
+  },
+  {
+    id: 'revolver', name: 'Revolver', damage: 55, headDamage: 110, cooldown: 0.35, auto: false,
+    magSize: 6, reloadTime: 2.4,
+    spread: { still: 0.002, move: 0.02, air: 0.045 }, // second only to the sniper
+  },
+  {
+    id: 'rifle', name: 'Rifle', damage: 25, headDamage: 50, cooldown: 0.15, auto: true,
+    magSize: 30, reloadTime: 2.2,
+    spread: { still: 0.01, move: 0.03, air: 0.07 },
+  },
+  {
+    id: 'p90', name: 'P90', damage: 17, headDamage: 34, cooldown: 0.075, auto: true,
+    magSize: 50, reloadTime: 2.5,
+    spread: { still: 0.014, move: 0.04, air: 0.08 },
+  },
+  {
+    id: 'shotgun', name: 'Shotgun', damage: 13, headDamage: 20, cooldown: 0.65, auto: false,
+    magSize: 6, reloadTime: 2.6,
+    pellets: 8, pelletSpread: 0.07, falloff: [8, 30, 0.3],
+    spread: { still: 0, move: 0.02, air: 0.05 },
+  },
+  {
+    id: 'sniper', name: 'Sniper', damage: 80, headDamage: 200, cooldown: 1.0, auto: false,
+    magSize: 5, reloadTime: 3.0,
+    spread: { still: 0.001, move: 0.015, air: 0.04 }, // the most accurate, even unscoped
+    scoped: { still: 0, move: 0.008, air: 0.04 },
+    zoomFov: 18, scopeTime: 0.22,
+  },
+];
+export const DEFAULT_WEAPON = WEAPONS.findIndex((w) => w.id === 'pistol'); // what everyone spawns with
+export const weaponIndex = (id) => WEAPONS.findIndex((w) => w.id === id);
+
+// Damage of one shot / pellet at `distance` metres.
+export function shotDamage(weapon, headshot, distance) {
+  const base = headshot ? weapon.headDamage : weapon.damage;
+  if (!weapon.falloff) return base;
+  const [near, far, min] = weapon.falloff;
+  const k = Math.min(1, Math.max(0, (distance - near) / (far - near)));
+  return Math.round(base * (1 - k * (1 - min)));
+}
+export const SWITCH_TIME = 0.45; // seconds to draw another weapon (can't fire meanwhile)
+export const FIRE_COOLDOWN = WEAPONS.find((w) => w.id === 'rifle').cooldown; // (preview page: holds the rifle)
+
 export const RESPAWN_TIME = 2; // seconds
 export const MAX_RANGE = 200;
 
@@ -53,10 +103,12 @@ export function lookDir(yaw, pitch) {
   return [-Math.sin(yaw) * c, Math.sin(pitch), -Math.cos(yaw) * c];
 }
 
-// Shot spread for a player moving at `speed` (m/s), on the ground or not.
-export function spreadFor(speed, onGround) {
-  if (!onGround) return SPREAD_AIR;
-  return SPREAD_STILL + (SPREAD_MOVE - SPREAD_STILL) * Math.min(1, speed / MOVE_SPEED);
+// Shot spread for a player with `weapon` moving at `speed` (m/s), on the
+// ground or not, scoped or not.
+export function spreadFor(weapon, speed, onGround, scoped = false) {
+  const s = (scoped && weapon.scoped) || weapon.spread;
+  if (!onGround) return s.air;
+  return s.still + (s.move - s.still) * Math.min(1, speed / MOVE_SPEED);
 }
 
 // A random direction within `spread` radians of `dir` (uniform over the cone's disc).

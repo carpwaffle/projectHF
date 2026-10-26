@@ -5,12 +5,14 @@ import * as THREE from 'three';
 import { Character, makeRifle, MUZZLE } from './character.js';
 import { Tracers } from './effects.js';
 
-// Where the camera sits relative to the head bone (metres, view-aligned).
-// A little left of centre and high, so the rifle (held in the middle of the
-// chest) shows lower right instead of covering the crosshair.
-const VIEW_EYE_SIDE = -0.14;
-const VIEW_EYE_UP = -0.04;
-const VIEW_EYE_FORWARD = 0.18;
+// Where the camera sits relative to the head bone (metres, view-aligned:
+// side, up, forward), per holding style, blended when switching. A little
+// left of centre so the gun shows lower right instead of covering the
+// crosshair; higher for the pistol, which is held up at eye level.
+const VIEW_EYE = {
+  rifle: [-0.14, -0.04, 0.18],
+  pistol: [-0.13, 0.05, 0.12],
+};
 const _eyePoint = new THREE.Vector3();
 const _offset = new THREE.Vector3();
 const _shift = new THREE.Vector3();
@@ -55,7 +57,7 @@ export class Renderer {
 
 
     this.avatars = new Map(); // id -> Character
-    this.onSound = null; // (name, position | null, intensity) => void, set by main.js
+    this.onSound = null; // (name, position | null, intensity, variant) => void, set by main.js
     this.tracers = new Tracers(this.scene);
 
     const resize = () => {
@@ -114,7 +116,7 @@ export class Renderer {
     if (avatar) return avatar;
     avatar = new Character(name, skin, team);
     this.applyLabelRule(avatar);
-    avatar.onSound = (sound, intensity) => this.onSound?.(sound, avatar.object.position.toArray(), intensity);
+    avatar.onSound = (sound, intensity, variant) => this.onSound?.(sound, avatar.object.position.toArray(), intensity, variant);
     this.scene.add(avatar.object);
     this.avatars.set(id, avatar);
     return avatar;
@@ -161,7 +163,7 @@ export class Renderer {
     if (this.view && this.viewSkin === skin) return;
     this.clearViewmodel();
     this.view = new Character('', skin);
-    this.view.onSound = (sound, intensity) => this.onSound?.(sound, null, intensity); // our own: not positioned
+    this.view.onSound = (sound, intensity, variant) => this.onSound?.(sound, null, intensity, variant); // our own: not positioned
     this.viewSkin = skin;
     this.view.bones.head.scale.setScalar(0.001);
     this.view.label.visible = false;
@@ -176,11 +178,11 @@ export class Renderer {
     this.viewSkin = -1;
   }
 
-  // state: { pos, yaw, pitch, vel, dead, reloading, eye:[x,y,z] (the camera) }
+  // state: { pos, yaw, pitch, vel, dead, reloading, weapon, hidden, eye:[x,y,z] (the camera) }
   updateViewmodel(dt, state) {
     const view = this.view;
     if (!view) return;
-    view.object.visible = !state.dead;
+    view.object.visible = !state.dead && !state.hidden;
     if (state.dead) return;
     view.update(dt, state);
     view.shadow.visible = false;
@@ -188,7 +190,9 @@ export class Renderer {
     // Shift the whole body so its eyes (just above and in front of the head
     // bone, turned with the view) sit exactly at the camera.
     view.bones.head.getWorldPosition(_eyePoint);
-    _offset.set(VIEW_EYE_SIDE, VIEW_EYE_UP, -VIEW_EYE_FORWARD).applyEuler(_euler.set(state.pitch, state.yaw, 0, 'YXZ'));
+    const k = view.pistolBlend;
+    const [side, up, forward] = VIEW_EYE.rifle.map((r, i) => r + (VIEW_EYE.pistol[i] - r) * k);
+    _offset.set(side, up, -forward).applyEuler(_euler.set(state.pitch, state.yaw, 0, 'YXZ'));
     _eyePoint.add(_offset);
     view.object.position.add(_shift.set(...state.eye).sub(_eyePoint));
     view.object.updateMatrixWorld(true);
@@ -208,12 +212,20 @@ export class Renderer {
     return this.gun.localToWorld(MUZZLE.clone()).toArray();
   }
 
-  // Someone else's shot: the tracer starts at their rifle's muzzle as we
-  // draw them (the host's message carries their eye position).
-  remoteShot(id, eye, end, hit) {
+  // Someone else's shot: the tracer(s) start at their gun's muzzle as we
+  // draw them (the host's message carries their eye position). ends / hits:
+  // one per bullet or pellet.
+  remoteShot(id, eye, ends, hits) {
     const avatar = this.avatars.get(id);
-    this.addTracer(avatar ? avatar.muzzleWorld().toArray() : eye, end, hit);
+    const from = avatar ? avatar.muzzleWorld().toArray() : eye;
+    ends.forEach((end, i) => this.addTracer(from, end, hits[i]));
     avatar?.fire();
+  }
+
+  setFov(fov) {
+    if (Math.abs(this.camera.fov - fov) < 0.01) return;
+    this.camera.fov = fov;
+    this.camera.updateProjectionMatrix();
   }
 
   kickGun() {
@@ -268,7 +280,7 @@ export class Renderer {
       avatar.label.scale.set(3.2 * grow, 0.4 * grow, 1);
     }
     if (this.view) {
-      const flash = this.view.rifle.userData.flash;
+      const flash = this.view.gun.userData.flash;
       flash.getWorldPosition(this.muzzleLight.position);
       this.muzzleLight.intensity = 6 * flash.userData.brightness;
     }

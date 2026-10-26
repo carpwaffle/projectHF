@@ -20,6 +20,7 @@ world-space rotation *relative to its rest pose* from the Mixamo rig onto
 the character rig, frame by frame, and key the result as local rotations.
 """
 
+import math
 import os
 import sys
 
@@ -31,6 +32,11 @@ SRC = os.path.join(ROOT, 'fbx')
 OUT = os.path.join(ROOT, 'build', 'blender')
 CHAR_SCALE = 0.375  # source characters are ~4.8 units tall -> ~1.8 m
 RIFLE_LENGTH = 0.9  # metres
+SNIPER_LENGTH = 1.1
+PISTOL_LENGTH = 0.21
+REVOLVER_LENGTH = 0.3
+P90_LENGTH = 0.52
+SHOTGUN_LENGTH = 1.0
 
 # Mixamo animation file -> clip name in the game
 CLIPS = {
@@ -47,6 +53,20 @@ CLIPS = {
     'Jump Loop': 'jump_loop',
     'Jump Down': 'jump_down',
     'Death': 'death',
+}
+# Pistol clips (fbx/Character Animation/Pistol), as pistol_*. Mixamo's pistol
+# jump is one clip: split into up / apex loop / down by frame range (the
+# apex and landing with the hips' rise removed: in the game the physics moves
+# the body). Death is shared with the rifle; run-firing and the reloads are
+# made in the game (upper-body firing over the run, procedural reloads).
+PISTOL_CLIPS = {
+    'Idle': 'pistol_idle',
+    'Run Forward': 'pistol_run_forward',
+    'Run Backward': 'pistol_run_backward',
+    'Strafe Left': 'pistol_strafe_left',
+    'Strafe Right': 'pistol_strafe_right',
+    'Firing': 'pistol_firing',
+    'Jump': [('pistol_jump_up', 1, 8), ('pistol_jump_loop', 8, 10), ('pistol_jump_down', 17, 25)],
 }
 
 # character bone <- mixamo bone
@@ -114,6 +134,14 @@ NAMED_COLORS = {
     'Black': '1c1c1e', 'Metal': '5a5f66', 'Barrels': '3a3d42', 'DarkMetal': '33363b',
     'DarkWood': '5c3a21', 'LightWood': '8a5a33', 'Wood': '7a4e2c',
     'BulletYellow': 'c9a227', 'BulletOrange': 'c8742a', 'BulletRed': 'a8322a',
+    # SniperRifle.fbx
+    'Trigger': '2b2d31', 'Barrel': '3a3d42', 'Green': '4d5b36', 'Magazine': '232427',
+    # Pistol.fbx
+    'Muzzle': '2b2d31', 'DarkerMetal': '2f3236', 'Material': '4a4e55',
+    # Revolver.fbx
+    'BulletTip': 'b87333',
+    # P90.fbx (renamed from Material.00x, see build_p90)
+    'P90Body': '2c2e31', 'P90Metal': '5a5f66', 'P90Mag': '3f4a46',
 }
 
 
@@ -125,8 +153,9 @@ def srgb_to_linear(hex_color):
 
 
 def principled_color(mat):
-    if mat.name in NAMED_COLORS:
-        return srgb_to_linear(NAMED_COLORS[mat.name])
+    name = mat.name.split('.')[0]  # a second import names them Black.001 etc.
+    if name in NAMED_COLORS:
+        return srgb_to_linear(NAMED_COLORS[name])
     if mat.node_tree:
         for node in mat.node_tree.nodes:
             if node.type == 'BSDF_PRINCIPLED':
@@ -203,11 +232,13 @@ def bones_parent_first(arm):
     return order
 
 
-def retarget(src, dst, clip_name):
-    """Bake src's current action onto dst as a new action named clip_name."""
+def retarget(src, dst, clip_name, frames=None, lock_height=False):
+    """Bake src's current action onto dst as a new action named clip_name.
+    frames: (first, last) to take only part of it; lock_height: drop the
+    hips' vertical movement (for jump parts)."""
     scene = bpy.context.scene
     src_action = src.animation_data.action
-    f0, f1 = (int(round(x)) for x in src_action.frame_range)
+    f0, f1 = frames or (int(round(x)) for x in src_action.frame_range)
     scene.render.fps = 30
 
     def sbone(name):
@@ -243,7 +274,10 @@ def retarget(src, dst, clip_name):
                 rot = world_rot(dst_inv) @ (src_now @ src_rest[name].inverted() @ dst_rest[name])
                 if name == 'Body':
                     hips_now = src.matrix_world @ sbone('Hips').head
-                    pos = rest.translation + dst_inv.to_3x3() @ ((hips_now - hips_rest) * root_scale)
+                    offset = hips_now - hips_rest
+                    if lock_height:
+                        offset.z = 0
+                    pos = rest.translation + dst_inv.to_3x3() @ (offset * root_scale)
                 elif name in FEET:
                     shin = FEET[name]
                     pos = pose[shin] @ Vector((0, dst.data.bones[shin].length, 0))
@@ -285,19 +319,25 @@ def build_animations(gender, reference):
     reset()
     dst, objs = import_character(os.path.join(SRC, 'Character', reference))
     actions = []
-    for file, clip in CLIPS.items():
-        path = os.path.join(SRC, 'Character Animation', file + '.fbx')
-        if not os.path.exists(path):
-            print(f'skip {file}: not found')
-            continue
-        src_objs = import_fbx(path)
-        src = find(src_objs, 'ARMATURE')[0]
-        actions.append(retarget(src, dst, clip))
-        for o in src_objs:
-            bpy.data.objects.remove(o, do_unlink=True)
-        for a in list(bpy.data.actions):
-            if a not in actions:
-                bpy.data.actions.remove(a)
+    sources = [('Character Animation', CLIPS), (os.path.join('Character Animation', 'Pistol'), PISTOL_CLIPS)]
+    for folder, clips in sources:
+        for file, clip in clips.items():
+            path = os.path.join(SRC, folder, file + '.fbx')
+            if not os.path.exists(path):
+                print(f'skip {file}: not found')
+                continue
+            src_objs = import_fbx(path)
+            src = find(src_objs, 'ARMATURE')[0]
+            if isinstance(clip, list):  # parts of one clip
+                for name, first, last in clip:
+                    actions.append(retarget(src, dst, name, (first, last), lock_height=True))
+            else:
+                actions.append(retarget(src, dst, clip))
+            for o in src_objs:
+                bpy.data.objects.remove(o, do_unlink=True)
+            for a in list(bpy.data.actions):
+                if a not in actions:
+                    bpy.data.actions.remove(a)
     # The exporter needs each action reachable from the armature.
     track_owner = dst.animation_data
     for a in actions:
@@ -335,9 +375,100 @@ def build_rifle():
     export_glb(os.path.join(OUT, 'rifle.glb'), [mesh], animations=False)
 
 
+def build_sniper():
+    build_skinned_gun('SniperRifle', 'sniper', SNIPER_LENGTH)
+
+
+def build_pistol():
+    # Modelled along +X: turn it so the muzzle points +Y like the others.
+    build_skinned_gun('Pistol', 'pistol', PISTOL_LENGTH, Matrix.Rotation(math.radians(90), 4, 'Z'))
+
+
+def build_revolver():
+    build_skinned_gun('Revolver', 'revolver', REVOLVER_LENGTH)
+
+
+def build_p90():
+    build_skinned_gun('P90', 'p90', P90_LENGTH,
+                      rename={'Material.001': 'P90Body', 'Material.003': 'P90Metal', 'Material.004': 'P90Mag'})
+
+
+def build_shotgun():
+    build_skinned_gun('Shotgun', 'shotgun', SHOTGUN_LENGTH)
+
+
+def build_skinned_gun(source, name, length, turn=Matrix.Identity(4), rename=None):
+    """Guns that keep their little skeleton, so the game can move parts (the
+    sniper's Magazine and bolt Handle, the pistol's Slide and Magazine).
+    Origin at the trigger, scaled to `length`, muzzle +Y in Blender (-Z in
+    the game); `turn` first, for models built along another axis."""
+    reset()
+    objs = import_fbx(os.path.join(SRC, 'Gun', source + '.fbx'))
+    arm = find(objs, 'ARMATURE')[0]
+    mesh = find(objs, 'MESH')[0]
+    for mat in mesh.data.materials:  # generic names -> NAMED_COLORS keys
+        if mat and rename and mat.name in rename:
+            mat.name = rename[mat.name]
+    for o in objs:
+        if o not in (arm, mesh):
+            bpy.data.objects.remove(o, do_unlink=True)
+    # The FBX import keys the armature object's transform; that animation
+    # would replay over the transforms set below.
+    for o in (arm, mesh):
+        o.animation_data_clear()
+    for pose_bone in arm.pose.bones:
+        pose_bone.matrix_basis = Matrix.Identity(4)
+    bpy.context.view_layer.update()
+    trigger = turn @ arm.matrix_world @ arm.data.bones['Trigger'].head_local
+    ys = [(turn @ mesh.matrix_world @ v.co).y for v in mesh.data.vertices]
+    move = Matrix.Scale(length / (max(ys) - min(ys)), 4) @ Matrix.Translation(-trigger) @ turn
+    # Bake world transform + move into the bone and vertex data, leaving both
+    # objects at identity (object transforms didn't survive the export).
+    mesh_world, arm_world = mesh.matrix_world.copy(), arm.matrix_world.copy()
+    mesh.parent = None
+    mesh.data.transform(move @ mesh_world)
+    mesh.matrix_world = Matrix.Identity(4)
+    arm.data.transform(move @ arm_world)  # (object mode: edit mode would overwrite it on exit)
+    arm.matrix_world = Matrix.Identity(4)
+    mesh.parent = arm
+    mesh.matrix_parent_inverse = Matrix.Identity(4)
+    bpy.context.view_layer.update()  # refresh the pose from the new rest bones (the exporter reads the pose)
+    rigid_parts(arm, mesh)
+    bake_material_colors([mesh])
+    export_glb(os.path.join(OUT, f'{name}.glb'), [arm, mesh], animations=False)
+
+
+def rigid_parts(arm, mesh):
+    """Each moving part follows only its own bone. Some models (the
+    revolver) weight every part half to the root bone as well, so moving or
+    hiding a part (scaling its bone to zero) only did half of it."""
+    roots = {b.name for b in arm.data.bones if b.parent is None}
+    groups = {g.index: g.name for g in mesh.vertex_groups}
+    fixed = 0
+    for v in mesh.data.vertices:
+        own = sum(g.weight for g in v.groups if groups.get(g.group) not in roots)
+        root = sum(g.weight for g in v.groups if groups.get(g.group) in roots)
+        if own <= 0 or own < root:  # (mostly on the root: a deliberate blend, or stray weights)
+            continue
+        for g in v.groups:
+            if groups.get(g.group) in roots and g.weight > 0:
+                g.weight = 0
+                fixed += 1
+    if fixed:
+        print(f'  {mesh.name}: {fixed} vertices now follow only their part')
+
+
 if __name__ == '__main__':
-    names = build_characters()
-    build_animations('male', 'Male_Casual.fbx')
-    build_animations('female', 'Female_Casual.fbx')
+    argv = sys.argv[sys.argv.index('--') + 1:] if '--' in sys.argv else []
+    # --guns: just the weapons; --anims: animations + weapons (no characters)
+    if '--guns' not in argv:
+        if '--anims' not in argv:
+            print('characters:', build_characters())
+        build_animations('male', 'Male_Casual.fbx')
+        build_animations('female', 'Female_Casual.fbx')
     build_rifle()
-    print('characters:', names)
+    build_sniper()
+    build_pistol()
+    build_revolver()
+    build_p90()
+    build_shotgun()

@@ -4,9 +4,10 @@
 // they're mixed to mono, trimmed of leading silence and normalised. Until
 // they've loaded, or if one fails, synthesised stand-ins play instead.
 //
-// play(name, position, intensity): position = [x,y,z] for other players'
-// sounds (3D: panned, quieter and, for gunshots, duller with distance), or
-// null for our own (played straight).
+// play(name, position, intensity, variant): position = [x,y,z] for other
+// players' sounds (3D: panned, quieter and, for gunshots, duller with
+// distance), or null for our own (played straight). variant: the weapon id
+// for shots and reloads.
 
 // Recorded sounds. The reload recording is split in two (magazine out, and
 // magazine in + bolt), each played so its loudest moment lands on the matching
@@ -17,8 +18,33 @@ const SOUND_FILES = {
   land: { url: 'sounds/landing/landing.mp3' },
   reload: {
     url: 'sounds/reload/reload.mp3',
-    parts: [{ from: 0.13, to: 0.62, peakAt: 0.15 }, { from: 0.72, to: 1.52, peakAt: 1.23 }],
+    parts: [{ from: 0.13, to: 0.62 }, { from: 0.72, to: 1.52 }],
   },
+};
+// When each reload sound peaks (seconds after the reload starts), per weapon:
+// the two recorded parts (magazine out, magazine in), then synthesised bolt
+// sounds. Timed to the animations (rifle: clip, magazine out ~4%, in at 56% of
+// 2.2 s; sniper: procedural path, out at 10-25%, in at 78% of 3 s, bolt 82-98%).
+const RELOAD_TIMING = {
+  rifle: { parts: [0.15, 1.23], bolt: [] },
+  sniper: { parts: [0.45, 2.3], bolt: [2.56, 2.86] },
+  pistol: { parts: [0.3, 1.13], bolt: [1.36, 1.44] }, // magazine out ~0.19-0.4 s, in at 72%, slide racked 80-90% of 1.6 s
+  revolver: { parts: [0.42, 1.6], bolt: [1.85] }, // drum out ~0.3 s, speedloader in ~1.6 s, drum closed ~1.85 s
+  p90: { parts: [0.45, 1.85], bolt: [] }, // magazine off 12-25% of 2.5 s, on at 75%
+  shotgun: { parts: [], bolt: [0.52, 1.04, 1.56, 2.08, 2.29, 2.5] }, // a shell into the port each trip, then the pump
+};
+// The sniper's shot: the recorded gunshot, deeper and louder, carrying
+// further; then the bolt (timed to the animation: it starts 0.15 s after the
+// shot and takes 0.75 s).
+// Per weapon: the recorded gunshot at a different pitch / loudness / range,
+// plus mechanical sounds after it (bolt or pump; seconds after the shot).
+const SHOTS = {
+  rifle: { rate: 1, volume: 1, range: 'shot' },
+  sniper: { rate: 0.78, volume: 1.15, range: 'shotSniper', after: [0.3, 0.5] },
+  pistol: { rate: 1.3, volume: 0.65, range: 'shotPistol' },
+  revolver: { rate: 0.95, volume: 0.95, range: 'shot' },
+  p90: { rate: 1.45, volume: 0.5, range: 'shotPistol' },
+  shotgun: { rate: 0.68, volume: 1.25, range: 'shotSniper', after: [0.17, 0.38] },
 };
 
 const VOLUME = {
@@ -31,6 +57,8 @@ const PITCH_SPREAD = { shot: 0.06, step: 0.16, land: 0.1 };
 // How far each sound carries: distance at full volume, and how fast it fades.
 const RANGE = {
   shot: { ref: 8, rolloff: 0.8 },
+  shotSniper: { ref: 14, rolloff: 0.6 },
+  shotPistol: { ref: 6, rolloff: 0.9 },
   reload: { ref: 1.5, rolloff: 1.5 },
   step: { ref: 1.5, rolloff: 1.6 },
   land: { ref: 2, rolloff: 1.4 },
@@ -42,7 +70,7 @@ const RELOAD_SEQUENCE = [['magOut', 0.08], ['magIn', 1.22], ['boltBack', 1.52], 
 let ctx = null;
 let master = null;
 let buffers = null; // name -> [AudioBuffer]: synthesised, replaced by recordings as they load
-let reloadParts = null; // [{ buffer, delay }] from the recording, once loaded
+let reloadParts = null; // [{ buffer, peak }] from the recording, once loaded (peak: s into the part)
 let muted = false;
 
 // Browsers only allow audio after a user gesture: call from a click handler.
@@ -90,24 +118,36 @@ export function setListener(pos, dir) {
 }
 
 // name: 'shot' | 'reload' | 'step' | 'land'
-export function playSound(name, position = null, intensity = 1) {
+export function playSound(name, position = null, intensity = 1, variant = 'rifle') {
   if (!ctx || muted) return;
   if (name === 'reload') {
+    const timing = RELOAD_TIMING[variant] ?? RELOAD_TIMING.rifle;
     if (reloadParts) {
-      for (const { buffer, delay } of reloadParts) playBuffer('reloadPart', 'reload', position, 1, delay, buffer);
+      reloadParts.forEach(({ buffer, peak }, i) => {
+        if (timing.parts[i] === undefined) return; // (e.g. the shotgun has no magazine)
+        playBuffer('reloadPart', 'reload', position, 1, Math.max(0, timing.parts[i] - peak), { buffer });
+      });
     } else {
       for (const [part, delay] of RELOAD_SEQUENCE) playBuffer(part, 'reload', position, 1, delay);
     }
+    timing.bolt.forEach((at, i) => playBuffer(i ? 'boltForward' : 'boltBack', 'reload', position, 1, at));
+    return;
+  }
+  if (name === 'shot') {
+    const shot = SHOTS[variant] ?? SHOTS.rifle;
+    playBuffer('shot', shot.range, position, intensity * shot.volume, 0, { rate: shot.rate });
+    (shot.after ?? []).forEach((at, i) => playBuffer(i ? 'boltForward' : 'boltBack', 'reload', position, 1, at));
     return;
   }
   playBuffer(name, name, position, intensity, 0);
 }
 
-function playBuffer(name, range, position, intensity, delay, buffer = null) {
+// opts: { buffer } to play a specific buffer, { rate } for a base playback rate.
+function playBuffer(name, range, position, intensity, delay, opts = {}) {
   const variants = buffers[name];
   const source = ctx.createBufferSource();
-  source.buffer = buffer ?? variants[Math.floor(Math.random() * variants.length)];
-  source.playbackRate.value = 1 + (Math.random() - 0.5) * (PITCH_SPREAD[name] ?? 0.04);
+  source.buffer = opts.buffer ?? variants[Math.floor(Math.random() * variants.length)];
+  source.playbackRate.value = (opts.rate ?? 1) * (1 + (Math.random() - 0.5) * (PITCH_SPREAD[name] ?? 0.04));
   const gain = ctx.createGain();
   gain.gain.value = VOLUME[name] * Math.min(1.5, intensity) * (0.9 + Math.random() * 0.2);
   source.connect(gain);
@@ -119,7 +159,7 @@ function playBuffer(name, range, position, intensity, delay, buffer = null) {
       positionX: position[0], positionY: position[1] + 1.2, positionZ: position[2],
     });
     out = out.connect(panner);
-    if (name === 'shot') {
+    if (name === 'shot') { // (incl. the sniper's)
       // Distant gunfire loses its crack: low-pass by distance.
       const l = ctx.listener;
       const d = l.positionX
@@ -142,10 +182,10 @@ async function loadRecordings() {
       if (!response.ok) throw new Error(`${response.status}`);
       const mono = toMono(await ctx.decodeAudioData(await response.arrayBuffer()));
       if (spec.parts) {
-        reloadParts = spec.parts.map(({ from, to, peakAt }) => {
+        reloadParts = spec.parts.map(({ from, to }) => {
           const part = slice(mono, from, to);
           normalise(part);
-          return { buffer: part, delay: Math.max(0, peakAt - peakTime(part)) };
+          return { buffer: part, peak: peakTime(part) };
         });
       } else {
         const sound = trimLeadingSilence(mono);
@@ -370,6 +410,6 @@ export function audioDebug() {
     state: ctx.state,
     muted,
     sounds: Object.fromEntries(Object.entries(buffers).map(([k, v]) => [k, v.map(stats)])),
-    reloadParts: reloadParts?.map((p) => ({ ...stats(p.buffer), delayMs: Math.round(p.delay * 1000), peakMs: Math.round(peakTime(p.buffer) * 1000) })),
+    reloadParts: reloadParts?.map((p) => ({ ...stats(p.buffer), peakMs: Math.round(p.peak * 1000) })),
   };
 }
