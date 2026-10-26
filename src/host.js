@@ -5,13 +5,19 @@
 
 import {
   SNAPSHOT_RATE, MAX_HP, DAMAGE, FIRE_COOLDOWN, RESPAWN_TIME, EYE_HEIGHT, MAX_RANGE, TEAMS,
-  pickSpawn, lookDir, playerAABB, rayAABB,
+  MAG_SIZE, RELOAD_TIME, HEAD_DAMAGE, SPAWN_PROTECTION,
+  pickSpawn, lookDir, headAABB, bodyAABB, rayAABB, normalize,
 } from './shared.js';
 import { SKINS } from './assets.js';
 
 export const HOST_ID = 'host';
 
 const round = (n) => Math.round(n * 100) / 100;
+
+// The client starts its reload timer when the player presses reload, the
+// host when the message arrives (half a round trip later). Finishing a little
+// early here keeps the first shots after a reload from being rejected.
+const RELOAD_GRACE = 0.2;
 
 export class HostServer {
   // world: the map's World (collision, spawns), shared with the local client.
@@ -69,6 +75,9 @@ export class HostServer {
       dead: false,
       respawnAt: 0,
       lastShot: 0,
+      ammo: MAG_SIZE,
+      reloadEnd: 0, // host time (s) the current reload finishes, 0 = not reloading
+      protectedUntil: performance.now() / 1000 + SPAWN_PROTECTION,
     };
     this.players.set(id, player);
     this.sendTo(id, { t: 'welcome', id, pos: player.pos, yaw: spawn.yaw, team });
@@ -121,6 +130,7 @@ export class HostServer {
     if (!player) return;
     if (msg.t === 'state') this.onState(player, msg);
     else if (msg.t === 'shoot') this.onShoot(player, msg);
+    else if (msg.t === 'reload') this.onReload(player);
   }
 
   // Clients simulate their own movement and report the result. We trust it,
@@ -139,33 +149,54 @@ export class HostServer {
   onShoot(shooter, msg) {
     const now = performance.now() / 1000;
     if (shooter.dead || now - shooter.lastShot < FIRE_COOLDOWN * 0.9) return;
+    if (shooter.reloadEnd || shooter.ammo <= 0) return; // no shooting while reloading or empty
     if (!Number.isFinite(msg.yaw) || !Number.isFinite(msg.pitch)) return;
     shooter.lastShot = now;
+    shooter.ammo -= 1;
+    shooter.protectedUntil = 0; // firing ends spawn protection
 
     const origin = [shooter.pos[0], shooter.pos[1] + EYE_HEIGHT, shooter.pos[2]];
-    const dir = lookDir(msg.yaw, msg.pitch);
+    // The shot's direction, spread included (applied by the shooter so their
+    // tracer shows where it really went; see README "Cheating").
+    const dir = Array.isArray(msg.d) && msg.d.length === 3 && msg.d.every(Number.isFinite)
+      ? normalize(msg.d) : lookDir(msg.yaw, msg.pitch);
 
     let dist = this.world.raycast(origin, dir, MAX_RANGE);
     let victim = null;
+    let headshot = false;
     for (const p of this.players.values()) {
       if (p.team === shooter.team || p.dead) continue; // bullets pass through teammates
-      const box = playerAABB(p.pos);
-      const t = rayAABB(origin, dir, box.min, box.max);
-      if (t < dist) { dist = t; victim = p; }
+      const head = headAABB(p.pos);
+      const body = bodyAABB(p.pos);
+      const th = rayAABB(origin, dir, head.min, head.max);
+      const tb = rayAABB(origin, dir, body.min, body.max);
+      const t = Math.min(th, tb);
+      if (t < dist) { dist = t; victim = p; headshot = th <= tb; }
     }
     dist = Math.min(dist, MAX_RANGE);
     const end = origin.map((o, i) => round(o + dir[i] * dist));
     this.broadcast({ t: 'shot', from: shooter.id, o: origin.map(round), e: end });
 
     if (!victim) return;
-    victim.hp = Math.max(0, victim.hp - DAMAGE);
-    this.broadcast({ t: 'hit', attacker: shooter.id, victim: victim.id, hp: victim.hp });
+    const hit = { t: 'hit', attacker: shooter.id, victim: victim.id, from: origin.map(round) };
+    if (now < victim.protectedUntil) {
+      this.broadcast({ ...hit, hp: victim.hp, blocked: 1 }); // spawn-protected: no damage
+      return;
+    }
+    victim.hp = Math.max(0, victim.hp - (headshot ? HEAD_DAMAGE : DAMAGE));
+    this.broadcast({ ...hit, hp: victim.hp, hs: headshot ? 1 : 0 });
     if (victim.hp === 0) {
       victim.dead = true;
       victim.respawnAt = now + RESPAWN_TIME;
+      victim.reloadEnd = 0;
       shooter.score += 1;
-      this.broadcast({ t: 'feed', text: `${shooter.name} ➜ ${victim.name}` });
+      this.broadcast({ t: 'feed', text: `${shooter.name} ➜ ${victim.name}${headshot ? ' (headshot)' : ''}` });
     }
+  }
+
+  onReload(player) {
+    if (player.dead || player.reloadEnd || player.ammo >= MAG_SIZE) return;
+    player.reloadEnd = performance.now() / 1000 + RELOAD_TIME - RELOAD_GRACE;
   }
 
   // ---- tick --------------------------------------------------------------
@@ -181,7 +212,16 @@ export class HostServer {
         p.pos = spawn.pos;
         p.hp = MAX_HP;
         p.dead = false;
+        p.ammo = MAG_SIZE;
+        p.protectedUntil = now + SPAWN_PROTECTION;
         this.sendTo(p.id, { t: 'respawn', pos: p.pos, yaw: spawn.yaw });
+      }
+    }
+
+    for (const p of this.players.values()) {
+      if (p.reloadEnd && now >= p.reloadEnd) {
+        p.ammo = MAG_SIZE;
+        p.reloadEnd = 0;
       }
     }
 
@@ -198,6 +238,8 @@ export class HostServer {
         hp: p.hp,
         score: p.score,
         dead: p.dead,
+        rl: p.reloadEnd ? 1 : 0, // reloading (for the animation)
+        sp: now < p.protectedUntil ? 1 : 0, // spawn-protected
       }));
       this.broadcast({ t: 'snap', players }, false);
     }

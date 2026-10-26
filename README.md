@@ -18,7 +18,16 @@ ES modules don't load from `file://`, so you need a local server. To play
 with friends over the internet, put these static files on any host, such as
 GitHub Pages, Netlify or itch.io.
 
-Controls: WASD move · Space jump · Mouse aim · Click shoot · Tab scoreboard · Esc release mouse.
+Controls: WASD move · Space jump · Mouse aim · Click shoot · R reload · M mute · Tab scoreboard · Esc release mouse.
+
+The rifle holds 30 rounds; reloading takes 2.2 s (press R, or it reloads by
+itself when the magazine runs dry). Spare magazines are unlimited.
+
+Headshots do double damage (2 to kill, 4 body shots). Shots spread more
+while moving and most in the air; the crosshair ticks show how much. After
+spawning you're protected for 3 s (a faint shield), until you fire. A red arc
+round the crosshair points at whoever hit you. Teammates' names show through
+walls; enemies' only when they're in sight.
 
 Players join the team with fewer players. The team score (top centre) is the
 team's total kills.
@@ -70,12 +79,13 @@ Units are metres; walls are 2 m wide and 3 m per storey. After editing:
 ```sh
 npm run build:map       # bake the lighting (~1.5 min on the GPU), export + optimise → assets/models/map*
 npm run build:map:fast  # no bake (dynamic lighting in game), a few seconds: for layout iterations
+npm run build:lightmap  # ~20 s: redo only the brightness settings (LM_*, DARK_*) from the last bake
 ```
 
 The map's lighting is baked into a lightmap (`assets/models/map_lightmap.ktx2`):
 sun + sky with shadows and bounced light, done by Cycles in
 `tools/export_map.py` (settings at the top: sun direction/strength, sky,
-exposure, ambient). The game draws the baked map unlit (texture × lightmap),
+exposure, dark lift, ambient). The game draws the baked map unlit (texture × lightmap),
 which is cheaper than real-time lights; characters still use dynamic lights.
 
 Then reload the game. `npm run blueprint` renders `maps/blueprint_base.png`, a
@@ -112,6 +122,9 @@ A ring of facades closes the arena; the game also keeps players inside the
 | `src/character.js` | Animated player character: clip blending, aim, rifle in hand, left-hand IK |
 | `src/assets.js` | Loads the GLB models; list of character skins |
 | `assets/models/` | Game-ready models (generated; don't edit by hand) |
+| `sounds/` | Sound effects (gunshot, reload, footsteps, landing), loaded by `src/audio.js` |
+| `src/audio.js` | Sound playback (3D for other players), processing of the recordings, synthesised fallbacks |
+| `src/effects.js` | Muzzle flash, tracers, impact sparks |
 | `fbx/` | Source FBX assets (characters, guns, Mixamo animations), all CC0 / Mixamo |
 | `tools/convert_assets.py` | Blender stage of the asset build (see Assets) |
 | `tools/optimize_assets.mjs` | Optimisation stage of the asset build (see Assets) |
@@ -137,8 +150,9 @@ A ring of facades closes the arena; the game also keeps players inside the
 
 ## Known limitations / next steps
 
-- **Cheating:** clients report their own positions, and the host can change
-  anything. That's fine among friends. Fix it with server-side movement plus
+- **Cheating:** clients report their own positions and apply their own shot
+  spread (so their tracer shows where the shot really went), and the host can
+  change anything. That's fine among friends. Fix it with server-side movement plus
   client prediction and reconciliation.
 - **No lag compensation:** shots are checked against where players are on the
   host *now*. High-ping players have to lead their targets.

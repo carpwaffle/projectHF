@@ -180,6 +180,19 @@ function dropLightingTextures(doc) {
   }
 }
 
+async function encodeLightmap(baked, lightmapSrc) {
+  const lightmapOut = path.join(OUT, 'map_lightmap.ktx2');
+  if (baked) {
+    const ktx = await encodeToKTX2(new Uint8Array(fs.readFileSync(lightmapSrc)), {
+      isUASTC: true, needSupercompression: true, isPerceptual: true, generateMipmap: true, imageDecoder,
+    });
+    fs.writeFileSync(lightmapOut, ktx);
+    report.push([path.relative(ROOT, lightmapOut), fs.statSync(lightmapSrc).size, ktx.length]);
+  } else if (fs.existsSync(lightmapOut)) {
+    fs.rmSync(lightmapOut);
+  }
+}
+
 async function buildMap() {
   const visualSrc = path.join(BLENDER_OUT, 'map_visual.glb');
   const collisionSrc = path.join(BLENDER_OUT, 'map_collision.glb');
@@ -188,6 +201,7 @@ async function buildMap() {
   const meta = JSON.parse(fs.readFileSync(path.join(OUT, 'map_meta.json'), 'utf8'));
   const lightmapSrc = path.join(BLENDER_OUT, 'lightmap.png');
   const baked = !!meta.lightmap && fs.existsSync(lightmapSrc);
+  if (LIGHTMAP_ONLY) return encodeLightmap(baked, lightmapSrc);
 
   const visual = await io.read(visualSrc);
   stripEngineAttributes(visual, baked ? ['TEXCOORD_1'] : []);
@@ -205,16 +219,7 @@ async function buildMap() {
   );
   await write(visual, path.join(OUT, 'map.glb'), fs.statSync(visualSrc).size);
 
-  const lightmapOut = path.join(OUT, 'map_lightmap.ktx2');
-  if (baked) {
-    const ktx = await encodeToKTX2(new Uint8Array(fs.readFileSync(lightmapSrc)), {
-      isUASTC: true, needSupercompression: true, isPerceptual: true, generateMipmap: true, imageDecoder,
-    });
-    fs.writeFileSync(lightmapOut, ktx);
-    report.push([path.relative(ROOT, lightmapOut), fs.statSync(lightmapSrc).size, ktx.length]);
-  } else if (fs.existsSync(lightmapOut)) {
-    fs.rmSync(lightmapOut);
-  }
+  await encodeLightmap(baked, lightmapSrc);
 
   const collision = await io.read(collisionSrc);
   // Player-only collision (COLP_* objects: window blockers that bullets pass
@@ -286,7 +291,9 @@ async function buildCityKit() {
 // ---- run -----------------------------------------------------------------------
 
 // --map-only: just the map (used by `npm run build:map` after editing the .blend).
-if (!process.argv.includes('--map-only')) {
+// --lightmap-only: just re-encode the lightmap (`npm run build:lightmap`).
+const LIGHTMAP_ONLY = process.argv.includes('--lightmap-only');
+if (!process.argv.includes('--map-only') && !LIGHTMAP_ONLY) {
   for (const f of fs.readdirSync(path.join(BLENDER_OUT, 'characters'))) {
     if (f.endsWith('.glb')) await optimizeMesh(path.join('characters', f));
   }

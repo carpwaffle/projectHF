@@ -17,8 +17,24 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #000; font-f
 
 #hud { position: fixed; inset: 0; pointer-events: none; }
 #crosshair { position: absolute; left: 50%; top: 50%; width: 4px; height: 4px; margin: -2px; background: #fff; border-radius: 50%; box-shadow: 0 0 2px #000; }
+#crosshairTicks { position: absolute; left: 50%; top: 50%; --gap: 4px; }
+#crosshairTicks i { position: absolute; background: rgba(255, 255, 255, 0.9); box-shadow: 0 0 2px #000; }
+#crosshairTicks i:nth-child(1), #crosshairTicks i:nth-child(2) { width: 2px; height: 7px; left: -1px; }
+#crosshairTicks i:nth-child(3), #crosshairTicks i:nth-child(4) { width: 7px; height: 2px; top: -1px; }
+#crosshairTicks i:nth-child(1) { top: calc(-1 * var(--gap) - 7px); }
+#crosshairTicks i:nth-child(2) { top: var(--gap); }
+#crosshairTicks i:nth-child(3) { left: calc(-1 * var(--gap) - 7px); }
+#crosshairTicks i:nth-child(4) { left: var(--gap); }
 #hitmarker { position: absolute; left: 50%; top: 50%; width: 20px; height: 20px; margin: -10px; border: 2px solid #ff4040; transform: rotate(45deg); opacity: 0; transition: opacity 0.15s; }
 #hitmarker.show { opacity: 1; transition: none; }
+#hitmarker.head { border-color: #ffd23f; }
+#hitmarker.kill { border-color: #ff2020; border-width: 3px; width: 28px; height: 28px; margin: -14px; }
+#hitmarker.blocked { border-color: #9aa3ad; }
+#damageDirs { position: absolute; left: 50%; top: 50%; }
+.damageDir { position: absolute; width: 170px; height: 26px; margin: -13px 0 0 -85px; border-radius: 50% 50% 0 0 / 100% 100% 0 0; border-top: 6px solid rgba(255, 45, 45, 0.95); background: radial-gradient(ellipse at 50% 0%, rgba(255, 40, 40, 0.55), rgba(255, 40, 40, 0) 70%); filter: drop-shadow(0 0 3px rgba(0, 0, 0, 0.6)); transform-origin: 50% 50%; }
+#killConfirm { position: absolute; top: calc(50% + 60px); width: 100%; text-align: center; font-size: 18px; font-weight: 700; color: #ff6b5c; text-shadow: 0 0 4px #000; opacity: 0; transition: opacity 0.4s; }
+#killConfirm.show { opacity: 1; transition: none; }
+#protectMsg { position: absolute; bottom: 70px; width: 100%; text-align: center; font-size: 16px; color: #9fe0ff; text-shadow: 0 0 4px #000; letter-spacing: 1px; }
 #damage { position: absolute; inset: 0; box-shadow: inset 0 0 120px rgba(255, 0, 0, 0.8); opacity: 0; transition: opacity 0.4s; }
 #damage.show { opacity: 1; transition: none; }
 #roomInfo { position: absolute; top: 12px; left: 12px; font-size: 14px; background: rgba(0, 0, 0, 0.5); padding: 6px 10px; border-radius: 4px; }
@@ -29,7 +45,12 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #000; font-f
 #killfeed div { background: rgba(0, 0, 0, 0.5); padding: 4px 8px; border-radius: 4px; }
 #hp { position: absolute; bottom: 20px; left: 20px; font-size: 36px; font-weight: 700; text-shadow: 0 0 4px #000; }
 #hp::before { content: "HP "; font-size: 16px; color: #aaa; }
+#ammo { position: absolute; bottom: 20px; right: 20px; font-size: 20px; color: #ccc; text-shadow: 0 0 4px #000; }
+#ammoCount { font-size: 36px; font-weight: 700; color: #fff; }
+#ammo.empty #ammoCount { color: #ff5a4c; }
+#reloadMsg { position: absolute; top: calc(50% + 28px); width: 100%; text-align: center; font-size: 16px; color: #ffe08a; text-shadow: 0 0 4px #000; letter-spacing: 1px; }
 #deadMsg { position: absolute; top: 40%; width: 100%; text-align: center; font-size: 28px; text-shadow: 0 0 6px #000; }
+#deadMsg .sub { font-size: 18px; color: #ccc; margin-top: 6px; }
 #clickToPlay { position: absolute; top: 60%; width: 100%; text-align: center; font-size: 18px; color: #ccc; }
 #scoreboard { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); border-collapse: collapse; background: rgba(0, 0, 0, 0.75); min-width: 280px; }
 #scoreboard td, #scoreboard th { padding: 6px 14px; text-align: left; }

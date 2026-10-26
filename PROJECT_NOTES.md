@@ -714,3 +714,209 @@ pixel than the old lit ones.
 - Enclosed rooms (e.g. the spawn room) are dim: raise `LM_AMBIENT`, or add
   windows.
 - Every layout change needs a re-bake (`npm run build:map`).
+
+### Brighter closed rooms (2026-10-26)
+
+- **Dark lift** (post-process): adds `DARK_LIFT * DARK_KNEE / (light +
+  DARK_KNEE)` (0.35, 0.3): the darkest spots gain +0.35, outdoor shade about
+  +0.09, sunlit surfaces almost nothing, so rooms brighten without flattening
+  the outdoors. `LM_AMBIENT` lowered to 0.08 (the lift does most of the work).
+- **More bounce**: bake material grey 0.5 → 0.7 (`BOUNCE_ALBEDO`) and 6
+  diffuse bounces (Cycles default 4) carry window light deeper into rooms.
+- **Fast re-tone**: a full bake saves the raw result
+  (`build/blender/lightmap_raw.npy`, 50 MB, git-ignored). `npm run
+  build:lightmap` (`export_map.py --retone` + `optimize_assets.mjs
+  --lightmap-only`) redoes exposure/lift/ambient in ~20 s instead of ~1.7 min.
+  The raw cache is deleted by `build:map:fast` (it would no longer match the map).
+- Verified with screenshots: spawn room, bridge interior and octagon floors
+  clearly lit; outdoor sun/shade contrast unchanged.
+
+### Blob shadow stays on the ground (2026-10-26)
+
+The players' blob shadow was a child of the character, so it rose with
+jumps. Now `main.js` casts a short ray (10 m) down from each remote player
+against the map collision (`groundBelow`) and passes `ground` to
+`Character.update`, which keeps the shadow on that surface, fading and
+shrinking it with height (gone at 4 m; hidden if nothing is below within
+10 m). Verified with a joiner jumping: on the road the feet went 0 → 1.19 m
+while the shadow stayed at 0.014 m (opacity 0.28 → 0.20); upstairs in a base it
+stayed on the 2nd floor (3.165 m) while the feet reached 4.14 m.
+
+## 16. Ammo and reloading (2026-10-26)
+
+- `MAG_SIZE` 30, `RELOAD_TIME` 2.2 s (`shared.js`); spare magazines are
+  unlimited. R reloads; pulling the trigger on an empty magazine reloads,
+  and so does firing the last round.
+- **Host-authoritative:** each player has `ammo` and `reloadEnd`; shots
+  while reloading or empty are ignored; `{t:'reload'}` starts a reload
+  (finishes 0.2 s early on the host, `RELOAD_GRACE`, because the client
+  started its timer half a round trip earlier); death cancels it, respawn
+  refills. Snapshots carry `rl` (reloading) for the animation.
+- **Client prediction:** `me.ammo` / `me.reloadEnd` for an instant HUD
+  (ammo bottom right, red at 0, "Reloading…" under the crosshair).
+- **Third person:** the Mixamo `reload` clip filtered to upper-body tracks,
+  sped up to 2.2 s, weighted x12 (the mixer averages by weight, so this makes
+  it win over the full-body locomotion on the upper body while legs keep
+  running); left-hand IK off during the reload.
+- **First person:** the rifle drops a little, tilts up and rolls towards the
+  camera, then comes back.
+- Dev hook: `window.hackfps.server` (the host's `HostServer`).
+- Verified: host accepted exactly 30 of 32 rapid shots, rejected shots
+  mid-reload, refilled after 2.2 s; with input events (pointer lock faked;
+  automation can't get a real lock): burst 30 → 22 on HUD and host alike, R →
+  reloading, no shots during it, back to 30; holding the trigger emptied the
+  magazine, auto-reloaded and resumed firing; a joiner's reload played on
+  their avatar in the host's view.
+
+## 17. First-person body: your own hands and rifle (2026-10-26)
+
+- The floating view-model rifle is replaced by the local player's own
+  `Character` (their skin, from the snapshot), seen from its eyes:
+  `Renderer.setViewmodel / updateViewmodel / clearViewmodel`. Same model
+  and animations others see: the hands on the rifle, the reload clip (left
+  hand to the magazine), the run cycle, recoil and muzzle flash.
+- The head bone is scaled to ~0 so it can't block the view; the label and blob
+  shadow are hidden. Each frame the body is shifted so a point on the head
+  (view-aligned offsets `VIEW_EYE_SIDE` -0.14, `VIEW_EYE_UP` -0.04,
+  `VIEW_EYE_FORWARD` 0.18) sits at the camera. Those offsets frame the rifle
+  lower right with both arms in view (the rifle clip holds it at the hip,
+  centred); tune them in `src/render.js`.
+- Drawn in a second pass (`viewScene` with its own lights, depth cleared),
+  so arms and rifle never clip into walls. Hidden while dead.
+- Local tracers now start at the real muzzle (`Character.muzzleWorld()`).
+- The old procedural gun (`buildGun`, reload dip) remains as a fallback
+  only when no viewmodel exists.
+- Verified with screenshots: idle (both arms on the rifle), mid-reload (left
+  arm up to the rifle), looking down/up.
+
+### Reload polish: magazine, hand blend, wrist (2026-10-26)
+
+- **Magazine**: the rifle model has none, so `makeRifle()` adds a dark box
+  under the receiver at `MAG_POS` (0, -0.068, -0.16): where the reload clip's
+  left palm actually grabs/inserts it, measured in rifle space (the first
+  guess, right ahead of the trigger, was ~8 cm behind). During the reload,
+  `updateMagazine(progress)`:
+  slides into the palm (0.04-0.11 of the clip), held, hidden while the hand
+  fetches a new one (0.22-0.36), new one in the palm, slides back in
+  (0.49-0.56). It stays a child of the rifle; the in-hand pose is computed
+  from the hand's world matrix (palm centre, orientation sampled from the
+  clip per gender in `calibrateMagazine`).
+- **Hand snap after a reload**: hand IK used to switch on abruptly when the
+  reload faded below 30%; now the IK result is slerped with the animated
+  pose by `1 - reloadBlend`. Measured: at most 1.0 cm of hand movement per
+  frame (120 fps) as it settles, no single-frame jump.
+- **Left wrist distortion**: the left hand was twisted ~120° around the
+  forearm (right hand ~55°); with no forearm twist bone the skin pinched.
+  `relaxWristTwist` moves half the twist into the forearm (the hand's world
+  pose is unchanged): now ~64°.
+- Testing tip: freeze a reload at an exact point with
+  `view.actions.reload.timeScale = 0` and set `.time`.
+
+## 18. Gunfire effects (2026-10-26)
+
+New `src/effects.js` (generated canvas textures, additive blending, no assets):
+- **Muzzle flash** (`makeMuzzleFlash`): a head-on star (hot core, glow,
+  spikes) plus two crossed flame tongues along the barrel; random size,
+  length and roll per shot; blooms and fades over 60 ms (was two flat cards
+  switched on/off). Exposes `brightness`, which drives a warm `PointLight` on
+  your own arms/rifle in the first-person pass (the world isn't lit by it:
+  the baked map is unlit).
+- **Tracers** (`Tracers`): camera-facing glowing ribbons (WebGL lines are
+  always 1 px), slightly wider with distance so far shots stay visible; the
+  tail runs toward the target as it fades (160 ms), so it reads as a bullet.
+  Small impact spark where a shot hits.
+- **Where tracers start**, three fixes:
+  1. `MUZZLE` was 12 cm inside the barrel and 2 cm low; now at the barrel's
+     end, (0, 0.028, -0.635): the lower part of the barrel, below the front
+     sight (y 0.042 looked like shots left the sight, because in first
+     person the tracer climbs toward the crosshair past the top of the barrel).
+  2. Other players' tracers started at their *eye* (that's what the host's
+     `shot` message carries); now at their rifle's muzzle as drawn
+     (`Renderer.remoteShot`).
+  3. Our own tracers used last frame's rifle pose; now queued and drawn
+     after `updateViewmodel` (`Renderer.localMuzzle()`), and the recoil kick
+     is applied only after the tracer is placed: the kick lifts the rifle
+     ~5 cm, and the tracer used to start from that lifted muzzle and hang
+     above the gun (at the front sight) while the rifle dropped back.
+- Verified: tracer start = muzzle within ~5 cm (own and remote); screenshots of the
+  flash (frozen: effects only last 60-160 ms) and a remote player's tracer
+  from the side.
+
+## 19. Sound effects (2026-10-26)
+
+`src/audio.js`: everything is synthesised with Web Audio when the game
+starts (no files to download; recorded CC0 samples can replace any sound by
+putting decoded AudioBuffers into `buffers[name]`).
+- **Gunshot** (3 variants): high-passed noise crack + low-passed noise body +
+  a thump sweeping 155→45 Hz + an echo tail, lightly saturated.
+- **Reload**: magazine out (release click + slide), magazine in (thunk +
+  clack + latch), bolt back and forward, scheduled at 0.08 / 1.22 / 1.52 /
+  1.66 s to match the clip (magazine out at 4%, in at 56% of 2.2 s).
+- **Footsteps** (4 variants): thud + grit, heel and toe, on the run cycle's
+  foot contacts (phase 0 and 0.5), louder with speed.
+- **Landing** (2 variants): heavier thud + gear rattle, louder for longer falls.
+- Other players' sounds are positional (`PannerNode`, inverse distance:
+  gunshots carry, footsteps fade by ~25 m); distant gunshots are low-passed.
+  Ours play unpanned. A compressor on the master output prevents clipping.
+- Events come from `Character.onSound` (shot, reload start, foot contact,
+  landing judged from the height above `state.ground`), so remote avatars
+  and our own first-person body share the logic; `Renderer.onSound` adds the
+  position. The listener follows the camera.
+- The AudioContext starts on the Host/Join click (browsers require a user
+  gesture). **M** toggles mute.
+- Verified: all 18 buffers valid (`hackfps.audioDebug()`), context running
+  after a real click; with input events, 3 shots → 3 shot sounds, R → one
+  reload, 1.5 s run → 5 steps ~0.26 s apart, jump → 1 landing; a driven
+  remote avatar produced positioned shot/reload/steps/landing. (Whether
+  they *sound* good needs a human ear.)
+
+### Recorded sounds (2026-10-26)
+
+The user supplied one MP3 per sound in `sounds/` (gunshot, reload,
+footsteps, landing). `audio.js` loads them when audio starts (`SOUND_FILES`):
+mixed to mono (for correct 3D panning), leading silence trimmed (the gunshot
+had 80 ms), normalised; each play varies pitch/volume slightly since there's
+one file per sound. The reload recording (1.5 s: a click/slide peaking at
+0.3 s, a clack peaking at 1.05 s) is split into two parts, each scheduled so
+its loudest moment lands on the animation: magazine out ~0.17 s, magazine in
+1.23 s (56% of 2.2 s). The synthesised sounds remain as the fallback while
+loading or if a file fails (console warning `[audio]`).
+Knobs: `VOLUME`, `RANGE` (how far each carries), `PITCH_SPREAD`, the reload
+`parts`. Licence/source of the sound files: to be recorded by the user.
+
+## 20. Basics: spawn protection, labels, damage feedback, headshots, spread (2026-10-26)
+
+- **Spawn protection** (`SPAWN_PROTECTION` 3 s, host-enforced): set on join
+  and respawn, cleared when the player fires; hits on a protected player do no
+  damage (`hit` with `blocked`, grey hit marker). Snapshot flag `sp` → a
+  faint pulsing team-coloured shield on the avatar; "Spawn protection 2.4"
+  on your HUD.
+- **Name labels**: teammates' labels have `depthTest` off (through walls),
+  are drawn last (`renderOrder` 999: the map's window glass, sorted as one
+  object at the map centre, was covering them) and grow with distance past
+  12 m so they stay readable; enemies' labels are hidden by walls
+  (`Renderer.setLocalTeam` / `applyLabelRule`). Previously every label showed
+  through walls (an accidental wallhack).
+- **Damage feedback**: `hit` messages carry the shooter's eye position →
+  a red arc around the crosshair pointing at the shooter, kept pointing
+  there as you turn, fading over 1.5 s. Death screen "Killed by NAME ·
+  headshot / Respawning in 1.4". The killer sees "Eliminated NAME" and a big
+  red hit marker; headshot hits show a gold marker; the kill feed notes
+  headshots.
+- **Headshots**: separate head box (y 1.45-1.82 m, 0.32 m wide) and body box
+  (below 1.45 m); `HEAD_DAMAGE` 50 vs `DAMAGE` 25 (2 vs 4 to kill). Boxes don't
+  follow the animation (approximate).
+- **Movement spread**: `spreadFor(speed, onGround)`: 0.17° still, up to 2° at
+  full run, 4° in the air, eased; the shooter applies it (`spreadDir`) and
+  sends the direction `d` (the host normalises it); crosshair ticks spread
+  with it. Trust model: a modified client could skip spread, like it could
+  fake movement.
+- Also: the fallback rifle no longer shows while dead.
+- Verified with a server-side bot (`server.addPlayer('bot', ...)`): protected
+  bot took 0 damage; then body -25, head -50; firing ended the shooter's
+  protection; bot shot me from the north while I faced east → arc at -90°
+  (left); two headshots → "Killed by Bot · headshot / Respawning in 1.4", feed
+  + score; my kill → "Eliminated Bot · headshot", kill marker; respawned bot
+  protected 3 s with the shield visible; labels: enemy hidden behind the
+  octagon, teammate readable through it; spread 0.17° → 2° running → ~4°
+  airborne, crosshair gap 5.7 → 23.7 → 43 px.

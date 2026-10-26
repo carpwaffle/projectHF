@@ -21,6 +21,10 @@ stored sRGB-encoded with headroom: stored = lighting / LM_MAX.
 
 --no-bake exports the plain map (dynamic lighting in game) in seconds, for
 quick layout iterations.
+
+--retone only redoes the post-processing (exposure, dark lift, ambient) from
+the raw bake saved by the last full bake (build/blender/lightmap_raw.npy),
+in seconds: `npm run build:lightmap` after changing the LM_* numbers below.
 """
 
 import json
@@ -39,6 +43,8 @@ os.makedirs(OUT, exist_ok=True)
 
 argv = sys.argv[sys.argv.index('--') + 1:] if '--' in sys.argv else []
 BAKE = '--no-bake' not in argv
+RETONE = '--retone' in argv
+RAW = os.path.join(OUT, 'lightmap_raw.npy')
 
 LM_SIZE = 2048  # lightmap resolution (~7-8 texels per metre on this map)
 # The map has ~35,000 UV islands (every kit piece splits into several), so
@@ -50,7 +56,13 @@ LM_BAKE_MARGIN = 4
 LM_SAMPLES = 256
 LM_MAX = 2.5  # stored value 1.0 = this much light (headroom for bright sun)
 LM_EXPOSURE = 1.9  # the brightest outdoor surfaces (98th percentile) end up here
-LM_AMBIENT = 0.16  # added everywhere, so shade and closed rooms aren't gloomy
+LM_AMBIENT = 0.08  # added everywhere
+# Dark lift: adds DARK_LIFT * DARK_KNEE / (light + DARK_KNEE), so the darkest
+# spots (closed rooms) gain DARK_LIFT, outdoor shade (~0.8) about a quarter
+# of that, and sunlit surfaces almost nothing. Brightens rooms without
+# flattening the outdoors.
+DARK_LIFT = 0.35
+DARK_KNEE = 0.3
 OUTER_SCALE = 0.1  # lightmap resolution of the ground outside the ring, relative
 OUTER_R = 51.0  # faces on the ground beyond this radius count as "outside"
 
@@ -61,7 +73,8 @@ SUN_FROM = Vector((30, -20, 50))  # Blender coordinates
 SUN_STRENGTH = 8.0
 SUN_ANGLE = math.radians(1.5)  # angular size: slightly soft shadow edges
 SKY_COLOUR = (0.55, 0.72, 1.0)
-BOUNCE_ALBEDO = 0.5  # grey of the bake material (how much light bounces into shade)
+BOUNCE_ALBEDO = 0.7  # grey of the bake material: lighter carries window light deeper into rooms
+DIFFUSE_BOUNCES = 6  # (Cycles default 4) more bounces also reach further indoors
 SKY_STRENGTH = 1.8
 
 
@@ -183,6 +196,8 @@ def bake(obj):
         d.use = True
     scene.cycles.device = 'GPU' if gpus else 'CPU'
     scene.cycles.samples = LM_SAMPLES
+    scene.cycles.diffuse_bounces = DIFFUSE_BOUNCES
+    scene.cycles.max_bounces = max(scene.cycles.max_bounces, DIFFUSE_BOUNCES)
     scene.cycles.use_denoising = False
     scene.render.bake.margin = LM_BAKE_MARGIN
     scene.render.bake.margin_type = 'EXTEND'
@@ -226,21 +241,30 @@ def blur(a, radius=1, sigma=0.75):
     return a
 
 
-def save_lightmap(img, path):
+def raw_pixels(img):
+    """The baked image as an H x W x 3 float array, also cached for --retone."""
     px = np.empty(LM_SIZE * LM_SIZE * 4, np.float32)
     img.pixels.foreach_get(px)
-    rgb = px.reshape(LM_SIZE, LM_SIZE, 4)[..., :3]
+    rgb = px.reshape(LM_SIZE, LM_SIZE, 4)[..., :3].copy()
+    np.save(RAW, rgb)
+    return rgb
+
+
+def save_lightmap(rgb, path):
+    size = rgb.shape[0]
     lum = rgb.mean(axis=2)
     lit = lum[lum > 1e-4]
     if lit.size == 0:
         raise RuntimeError('the bake came out black (check the lightmap UVs are inside 0..1)')
     ref = np.percentile(lit, 98)
-    rgb = blur(rgb) * (LM_EXPOSURE / ref) + LM_AMBIENT
+    rgb = blur(rgb) * (LM_EXPOSURE / ref)
+    light = rgb.mean(axis=2, keepdims=True)
+    rgb = rgb + DARK_LIFT * DARK_KNEE / (light + DARK_KNEE) + LM_AMBIENT
     v = np.clip(rgb / LM_MAX, 0, 1)
     srgb = np.where(v <= 0.0031308, v * 12.92, 1.055 * np.power(v, 1 / 2.4) - 0.055)
-    out = bpy.data.images.new('Lightmap', LM_SIZE, LM_SIZE, alpha=False)
+    out = bpy.data.images.new('Lightmap', size, size, alpha=False)
     out.colorspace_settings.name = 'Non-Color'  # we did the sRGB encoding ourselves
-    flat = np.concatenate([srgb, np.ones((LM_SIZE, LM_SIZE, 1), np.float32)], axis=2).ravel()
+    flat = np.concatenate([srgb, np.ones((size, size, 1), np.float32)], axis=2).ravel()
     out.pixels.foreach_set(flat.astype(np.float32))
     out.filepath_raw = path
     out.file_format = 'PNG'
@@ -250,21 +274,28 @@ def save_lightmap(img, path):
 
 # ---- main ----------------------------------------------------------------------
 
+if RETONE:
+    if not os.path.exists(RAW):
+        sys.exit('no raw bake yet: run a full `npm run build:map` first')
+    save_lightmap(np.load(RAW), os.path.join(OUT, 'lightmap.png'))
+    sys.exit(0)
+
 lightmap_meta = None
 if BAKE:
     merged = merged_visual()
     lightmap_uvs(merged)
     setup_lighting()
     image = bake(merged)
-    save_lightmap(image, os.path.join(OUT, 'lightmap.png'))
+    save_lightmap(raw_pixels(image), os.path.join(OUT, 'lightmap.png'))
     merged.hide_render = False
     select_objects([merged])
     export(os.path.join(OUT, 'map_visual.glb'))
     lightmap_meta = {'file': 'map_lightmap.ktx2', 'intensity': LM_MAX}
 else:
     lightmap_png = os.path.join(OUT, 'lightmap.png')
-    if os.path.exists(lightmap_png):
-        os.remove(lightmap_png)  # stale: the optimiser must not pair it with this map
+    for stale in (lightmap_png, RAW):  # the optimiser / --retone must not pair them with this map
+        if os.path.exists(stale):
+            os.remove(stale)
     select(['Buildings', 'Visual'])
     export(os.path.join(OUT, 'map_visual.glb'))
 

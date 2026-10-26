@@ -29,18 +29,24 @@
         <button id="joinBtn">Join</button>
       </div>
       <p id="status"></p>
-      <p class="help">WASD move · Space jump · Mouse aim · Click shoot · Tab scores · Esc release mouse</p>
+      <p class="help">WASD move · Space jump · Mouse aim · Click shoot · R reload · M mute · Tab scores · Esc release mouse</p>
     </div>
   </div>
 
   <div id="hud" hidden>
     <div id="crosshair"></div>
+    <div id="crosshairTicks"><i></i><i></i><i></i><i></i></div>
     <div id="hitmarker"></div>
+    <div id="damageDirs"></div>
+    <div id="killConfirm"></div>
+    <div id="protectMsg" hidden></div>
     <div id="damage"></div>
     <div id="roomInfo"></div>
     <div id="teamScore"></div>
     <div id="killfeed"></div>
     <div id="hp">100</div>
+    <div id="ammo"><span id="ammoCount">30</span> / 30</div>
+    <div id="reloadMsg" hidden>Reloading…</div>
     <div id="deadMsg" hidden>You died — respawning…</div>
     <div id="clickToPlay">Click to play</div>
     <table id="scoreboard" hidden></table>

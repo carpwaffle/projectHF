@@ -20,8 +20,18 @@ export const TEAMS = [
 ];
 
 export const MAX_HP = 100;
-export const DAMAGE = 25;
+export const DAMAGE = 25; // body shot: 4 to kill
+export const HEAD_DAMAGE = 50; // headshot: 2 to kill
+export const SPAWN_PROTECTION = 3; // seconds of invulnerability after spawning (ends early when you fire)
+
+// Shot spread: half-angle (radians) of the cone shots land in. Nearly
+// pinpoint standing still, wider while moving, widest in the air.
+export const SPREAD_STILL = 0.003;
+export const SPREAD_MOVE = 0.035; // at full running speed
+export const SPREAD_AIR = 0.07;
 export const FIRE_COOLDOWN = 0.15; // seconds
+export const MAG_SIZE = 30; // rounds per magazine (spare magazines are unlimited)
+export const RELOAD_TIME = 2.2; // seconds
 export const RESPAWN_TIME = 2; // seconds
 export const MAX_RANGE = 200;
 
@@ -43,7 +53,47 @@ export function lookDir(yaw, pitch) {
   return [-Math.sin(yaw) * c, Math.sin(pitch), -Math.cos(yaw) * c];
 }
 
-// Player hitbox for shooting (feet at pos).
+// Shot spread for a player moving at `speed` (m/s), on the ground or not.
+export function spreadFor(speed, onGround) {
+  if (!onGround) return SPREAD_AIR;
+  return SPREAD_STILL + (SPREAD_MOVE - SPREAD_STILL) * Math.min(1, speed / MOVE_SPEED);
+}
+
+// A random direction within `spread` radians of `dir` (uniform over the cone's disc).
+export function spreadDir(dir, spread) {
+  if (spread <= 0) return dir;
+  const r = Math.tan(spread) * Math.sqrt(Math.random());
+  const a = Math.random() * Math.PI * 2;
+  // Two axes perpendicular to dir.
+  const up = Math.abs(dir[1]) < 0.99 ? [0, 1, 0] : [1, 0, 0];
+  const u = normalize(cross(dir, up));
+  const v = cross(u, dir);
+  return normalize(dir.map((d, i) => d + (u[i] * Math.cos(a) + v[i] * Math.sin(a)) * r));
+}
+
+const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+export function normalize(v) {
+  const l = Math.hypot(...v) || 1;
+  return v.map((x) => x / l);
+}
+
+// Hitboxes for shooting (feet at pos): the head on top of the body.
+const HEAD_BOTTOM = 1.45;
+const HEAD_HALF = 0.16;
+export function headAABB(pos) {
+  return {
+    min: [pos[0] - HEAD_HALF, pos[1] + HEAD_BOTTOM, pos[2] - HEAD_HALF],
+    max: [pos[0] + HEAD_HALF, pos[1] + PLAYER_HEIGHT + 0.02, pos[2] + HEAD_HALF],
+  };
+}
+export function bodyAABB(pos) {
+  return {
+    min: [pos[0] - PLAYER_RADIUS, pos[1], pos[2] - PLAYER_RADIUS],
+    max: [pos[0] + PLAYER_RADIUS, pos[1] + HEAD_BOTTOM, pos[2] + PLAYER_RADIUS],
+  };
+}
+
+// Whole-player box (feet at pos), for where a tracer stops.
 export function playerAABB(pos) {
   return {
     min: [pos[0] - PLAYER_RADIUS, pos[1], pos[2] - PLAYER_RADIUS],
