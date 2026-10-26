@@ -139,6 +139,11 @@ export function playSound(name, position = null, intensity = 1, variant = 'rifle
     (shot.after ?? []).forEach((at, i) => playBuffer(i ? 'boltForward' : 'boltBack', 'reload', position, 1, at));
     return;
   }
+  if (name === 'pickup') { // picking up a weapon: a quick mechanical clack-clack
+    playBuffer('boltBack', 'reload', position, 0.8, 0);
+    playBuffer('boltForward', 'reload', position, 0.8, 0.12);
+    return;
+  }
   playBuffer(name, name, position, intensity, 0);
 }
 

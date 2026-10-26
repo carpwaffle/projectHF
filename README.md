@@ -18,9 +18,22 @@ ES modules don't load from `file://`, so you need a local server. To play
 with friends over the internet, put these static files on any host, such as
 GitHub Pages, Netlify or itch.io.
 
-Controls: WASD move · Space jump · Mouse aim · Click shoot · R reload · 1-6 / Q / wheel switch weapon · Right mouse scope (sniper) · M mute · Tab scoreboard · Esc release mouse.
+Controls: WASD move · Space jump · Mouse aim · Click shoot · R reload · 1-6 / Q / wheel switch weapon (only for the player named "Admin") · Right mouse scope (sniper) · M mute · Tab scoreboard · Esc release mouse.
 
-Everyone carries all six weapons and spawns with the pistol:
+Everyone spawns with the pistol. Other weapons are picked up: twelve spots
+marked with a white circle (House04, House12, the east and west ends of the
+road, four on House08's 5th floor, the roofs of House03 and House11, and the
+middle of the House01 / House09 bridges) each
+offer a random weapon (not the pistol). Walk over the circle to take it, with a full magazine; you keep it
+until you pick up a different one or die (back to the pistol). An emptied spot
+shows a countdown and gets a new random weapon after 20 s. (The player named "Admin" can also switch
+freely with the keys below.)
+
+Heal packs (green circles: 4th floor of House05 / House13, roofs of House07 /
+House15, the north annex of House01 / south annex of House09, two on House08's
+roof; the House07 / House15 ones sit behind a billboard that hides them
+from House08) heal you to full when you walk over one while hurt; they refill after
+20 s, with the same countdown.
 
 | Key | Weapon | Fire | Damage (body / head) | Rounds | Reload |
 |---|---|---|---|---|---|
@@ -29,8 +42,9 @@ Everyone carries all six weapons and spawns with the pistol:
 | 3 | Rifle | automatic, 0.15 s | 25 / 50 | 30 | 2.2 s |
 | 4 | P90 | automatic, 0.075 s | 17 / 34 | 50 | 2.5 s |
 | 5 | Shotgun | per click, pumped, 0.65 s | 8 pellets × 13 / 20, less with distance | 6 | 2.6 s |
-| 6 | Sniper | per click, bolt, 1 s; scope | 80 / 200 | 5 | 3 s | Switching
-takes 0.45 s and cancels a reload. Press R to reload, or it reloads by itself
+| 6 | Sniper | per click, bolt, 1 s; scope | 80 / 200 | 5 | 3 s |
+
+Switching takes 0.45 s and cancels a reload. Press R to reload, or it reloads by itself
 when the magazine runs dry. Spare magazines are unlimited. Weapon stats live in
 `WEAPONS` in `src/shared.js`.
 

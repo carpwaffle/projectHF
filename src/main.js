@@ -5,7 +5,7 @@
 import {
   STATE_SEND_RATE, INTERP_DELAY, EYE_HEIGHT, MAX_HP, MOVE_SPEED,
   MAX_RANGE, TEAMS, WEAPONS, DEFAULT_WEAPON, SWITCH_TIME, RESPAWN_TIME, SPAWN_PROTECTION,
-  lookDir, playerAABB, rayAABB, spreadFor, spreadDir,
+  ADMIN_NAME, PICKUP_SPOTS, lookDir, playerAABB, rayAABB, spreadFor, spreadDir,
 } from './shared.js';
 import { makeRoomCode, openHostPeer, joinRoom } from './net.js';
 import { HostServer, HOST_ID } from './host.js';
@@ -77,14 +77,15 @@ window.addEventListener('keydown', (e) => {
   if (e.code === 'Tab' && session) { e.preventDefault(); $('scoreboard').hidden = false; }
   if (e.code === 'KeyR' && session && locked()) startReload(performance.now());
   if (e.code === 'KeyM' && session) addFeed(toggleMute() ? 'Sound off (M)' : 'Sound on (M)');
-  if (session && locked()) {
+  // Weapon switching (number keys, Q, wheel): only for the player named "Admin".
+  if (session && locked() && isAdmin()) {
     const digit = /^Digit(\d)$/.exec(e.code);
     if (digit && WEAPONS[digit[1] - 1]) switchWeapon(digit[1] - 1, performance.now());
     if (e.code === 'KeyQ') switchWeapon(me.lastWeapon, performance.now());
   }
 });
 window.addEventListener('wheel', (e) => {
-  if (!session || !locked() || Math.abs(e.deltaY) < 1) return;
+  if (!session || !locked() || !isAdmin() || Math.abs(e.deltaY) < 1) return;
   switchWeapon((me.weapon + (e.deltaY > 0 ? 1 : WEAPONS.length - 1)) % WEAPONS.length, performance.now());
 });
 canvas.addEventListener('contextmenu', (e) => e.preventDefault());
@@ -150,6 +151,7 @@ function onMessage(msg) {
         renderer.setViewmodel(mine.skin); // first-person body in our own skin
       }
       for (const id of renderer.avatars.keys()) if (!players.has(id)) renderer.removeAvatar(id);
+      if (msg.pk) renderer.updatePickups(msg.pk, msg.pt);
       updateScoreboard();
       break;
     }
@@ -182,8 +184,28 @@ function onMessage(msg) {
       deathInfo = null;
       me.protectedUntil = performance.now() + SPAWN_PROTECTION * 1000;
       me.ammo = WEAPONS.map((w) => w.magSize);
+      me.weapon = msg.w ?? DEFAULT_WEAPON; // back to the spawn weapon
       me.reloadEnd = 0;
       me.switchEnd = 0;
+      me.scope = 0;
+      break;
+    case 'pickup': { // we walked over a weapon spot (the host has already given it to us)
+      const now = performance.now();
+      if (msg.w !== me.weapon) me.lastWeapon = me.weapon;
+      me.weapon = msg.w;
+      me.ammo[msg.w] = WEAPONS[msg.w].magSize;
+      me.reloadEnd = 0;
+      me.switchEnd = now + SWITCH_TIME * 1000;
+      me.scope = 0;
+      addFeed(`Picked up ${WEAPONS[msg.w].name}`);
+      playSound('pickup', null);
+      break;
+    }
+    case 'heal': // we walked over a heal pack
+      me.hp = msg.hp;
+      flash('heal', 300);
+      addFeed('Healed');
+      playSound('pickup', null);
       break;
     case 'leave':
       renderer.removeAvatar(msg.id);
@@ -386,6 +408,8 @@ function showRoomInfo() {
   info.style.borderLeft = myId ? `4px solid ${TEAMS[myTeam].color}` : '';
 }
 
+const isAdmin = () => nameOf(myId) === ADMIN_NAME;
+
 function nameOf(id) {
   return latestPlayers.find((p) => p.id === id)?.name ?? 'someone';
 }
@@ -440,7 +464,9 @@ function updateCrosshair() {
 
 function updateHud(now) {
   $('hp').textContent = me.hp;
-  $('weaponName').textContent = WEAPONS.map((w, i) => (i === me.weapon ? `[${i + 1}] ${w.name}` : `${i + 1}`)).join('  ');
+  $('weaponName').textContent = isAdmin()
+    ? WEAPONS.map((w, i) => (i === me.weapon ? `[${i + 1}] ${w.name}` : `${i + 1}`)).join('  ')
+    : WEAPONS[me.weapon].name;
   $('ammoCount').textContent = me.ammo[me.weapon];
   $('magSize').textContent = weapon().magSize;
   $('ammo').classList.toggle('empty', me.ammo[me.weapon] === 0);
@@ -593,6 +619,7 @@ function leaveGame(reason) {
   renderer.reload = -1;
   renderer.clearAvatars();
   renderer.clearViewmodel();
+  renderer.updatePickups(null);
   if (document.pointerLockElement) document.exitPointerLock();
   $('hud').hidden = true;
   $('menu').hidden = false;

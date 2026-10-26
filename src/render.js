@@ -2,8 +2,9 @@
 // rifle, and tracers.
 
 import * as THREE from 'three';
-import { Character, makeRifle, MUZZLE } from './character.js';
+import { Character, makeRifle, makeGun, MUZZLE } from './character.js';
 import { Tracers } from './effects.js';
+import { WEAPONS, PICKUP_SPOTS, PICKUP_RADIUS, HEAL_SPOTS } from './shared.js';
 
 // Where the camera sits relative to the head bone (metres, view-aligned:
 // side, up, forward), per holding style, blended when switching. A little
@@ -59,6 +60,7 @@ export class Renderer {
     this.avatars = new Map(); // id -> Character
     this.onSound = null; // (name, position | null, intensity, variant) => void, set by main.js
     this.tracers = new Tracers(this.scene);
+    this.buildPickupSpots();
 
     const resize = () => {
       this.renderer.setSize(window.innerWidth, window.innerHeight, false);
@@ -198,6 +200,118 @@ export class Renderer {
     view.object.updateMatrixWorld(true);
   }
 
+  // ---- weapon pickups ----------------------------------------------------
+
+  // A thick circle on the floor at each spot (white: weapon, green: heal
+  // pack), and a slot above it for what's on offer (spinning and bobbing).
+  // Same order as the host's pickups: weapon spots, then heal spots.
+  buildPickupSpots() {
+    const ring = new THREE.RingGeometry(PICKUP_RADIUS - 0.16, PICKUP_RADIUS, 48).rotateX(-Math.PI / 2);
+    const ringMaterial = (color) => new THREE.MeshBasicMaterial({
+      color, toneMapped: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2,
+    });
+    const white = ringMaterial(0xffffff);
+    const green = ringMaterial(0x3cff6e);
+    const spots = [...PICKUP_SPOTS.map((p) => [p, false]), ...HEAL_SPOTS.map((p) => [p, true])];
+    this.pickups = spots.map(([[x, y, z], heal], i) => {
+      const circle = new THREE.Mesh(ring, heal ? green : white);
+      circle.position.set(x, y + 0.02, z);
+      this.scene.add(circle);
+      const holder = new THREE.Group();
+      holder.position.set(x, y + 1.0, z);
+      holder.rotation.y = i * 1.3; // (not all in step)
+      this.scene.add(holder);
+      // Countdown to the next weapon, shown while the spot is empty.
+      const canvas = document.createElement('canvas');
+      canvas.width = 128;
+      canvas.height = 64;
+      const texture = new THREE.CanvasTexture(canvas);
+      texture.colorSpace = THREE.SRGBColorSpace;
+      const timer = new THREE.Sprite(new THREE.SpriteMaterial({ map: texture, transparent: true, toneMapped: false }));
+      timer.scale.set(1.0, 0.5, 1);
+      timer.position.set(x, y + 1.0, z);
+      timer.visible = false;
+      this.scene.add(timer);
+      return { holder, heal, weapon: -1, gun: null, timer, canvas, texture, readyAt: 0, shown: -1 };
+    });
+  }
+
+  // A first-aid box: white, a red cross on every side.
+  makeHealPack() {
+    if (!this.healPackGeometry) {
+      const canvas = document.createElement('canvas');
+      canvas.width = canvas.height = 64;
+      const g = canvas.getContext('2d');
+      g.fillStyle = '#f4f4f4';
+      g.fillRect(0, 0, 64, 64);
+      g.fillStyle = '#e02424';
+      g.fillRect(24, 10, 16, 44);
+      g.fillRect(10, 24, 44, 16);
+      const map = new THREE.CanvasTexture(canvas);
+      map.colorSpace = THREE.SRGBColorSpace;
+      this.healPackGeometry = new THREE.BoxGeometry(0.42, 0.42, 0.42);
+      this.healPackMaterial = new THREE.MeshLambertMaterial({ map });
+    }
+    return new THREE.Mesh(this.healPackGeometry, this.healPackMaterial);
+  }
+
+  drawTimer(spot, seconds) {
+    if (seconds === spot.shown) return;
+    spot.shown = seconds;
+    const g = spot.canvas.getContext('2d');
+    g.clearRect(0, 0, 128, 64);
+    g.font = 'bold 44px system-ui, sans-serif';
+    g.textAlign = 'center';
+    g.textBaseline = 'middle';
+    g.lineWidth = 8;
+    g.strokeStyle = 'rgba(0,0,0,0.65)';
+    g.strokeText(String(seconds), 64, 34);
+    g.fillStyle = '#ffffff';
+    g.fillText(String(seconds), 64, 34);
+    spot.texture.needsUpdate = true;
+  }
+
+  // weapons: per spot, the index into WEAPONS on offer or -1 (empty); null
+  // hides them all (not in a game). remaining: per spot, seconds until an
+  // empty one gets its next weapon.
+  updatePickups(weapons, remaining = []) {
+    const now = performance.now() / 1000;
+    this.pickups.forEach((spot, i) => {
+      const w = weapons ? weapons[i] ?? -1 : -1;
+      spot.timer.visible = !!weapons && w < 0;
+      if (spot.timer.visible) spot.readyAt = now + (remaining[i] ?? 0);
+      if (w === spot.weapon) return;
+      spot.weapon = w;
+      if (spot.gun) spot.holder.remove(spot.gun);
+      spot.gun = null;
+      if (w < 0) return;
+      if (spot.heal) {
+        spot.gun = this.makeHealPack();
+        spot.holder.add(spot.gun);
+        return;
+      }
+      const id = WEAPONS[w].id;
+      spot.gun = makeGun(id);
+      // Parts only shown in the hand during a reload (speedloader, shell).
+      const reload = spot.gun.userData.points.reload;
+      if (reload?.hideOutside) {
+        for (const name of [reload.part, ...(reload.partAlso ?? [])]) spot.gun.userData.bones[name]?.scale.setScalar(1e-4);
+      }
+      spot.gun.scale.setScalar(id === 'pistol' || id === 'revolver' ? 2.2 : 1.4); // easy to see from afar
+      spot.holder.add(spot.gun);
+    });
+  }
+
+  animatePickups(dt) {
+    const t = performance.now() / 1000;
+    for (const spot of this.pickups) {
+      if (spot.timer.visible) this.drawTimer(spot, Math.max(1, Math.ceil(spot.readyAt - t)));
+      if (!spot.gun) continue;
+      spot.holder.rotation.y += dt * 1.6;
+      spot.gun.position.y = Math.sin(t * 2 + spot.holder.rotation.x) * 0.08;
+    }
+  }
+
   // ---- effects -----------------------------------------------------------
 
   // from, to: [x,y,z]; hit: the shot hit something (impact spark)
@@ -272,6 +386,7 @@ export class Renderer {
 
     this.camera.updateMatrixWorld();
     this.tracers.update(dt, this.camera);
+    this.animatePickups(dt);
     // Teammates' names stay readable far away (and through walls): they grow
     // with distance beyond 12 m instead of shrinking.
     for (const avatar of this.avatars.values()) {

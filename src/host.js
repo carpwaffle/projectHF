@@ -5,7 +5,8 @@
 
 import {
   SNAPSHOT_RATE, MAX_HP, RESPAWN_TIME, EYE_HEIGHT, MAX_RANGE, TEAMS,
-  WEAPONS, DEFAULT_WEAPON, SWITCH_TIME, SPAWN_PROTECTION, shotDamage,
+  WEAPONS, DEFAULT_WEAPON, SWITCH_TIME, SPAWN_PROTECTION, shotDamage, ADMIN_NAME,
+  PICKUP_SPOTS, PICKUP_RADIUS, PICKUP_RESPAWN, randomPickupWeapon, HEAL_SPOTS, HEAL_RESPAWN,
   pickSpawn, lookDir, headAABB, bodyAABB, rayAABB, normalize,
 } from './shared.js';
 import { SKINS } from './assets.js';
@@ -28,6 +29,13 @@ export class HostServer {
     this.players = new Map();
     this.conns = new Map(); // clientId -> { rel, state }
     this.lastSnapshot = 0;
+    // Pickups: the weapon spots, then the heal spots. item: the weapon on
+    // offer (index into WEAPONS) / 1 for a heal pack, -1 = empty; readyAt:
+    // when an empty one refills.
+    this.pickups = [
+      ...PICKUP_SPOTS.map((pos) => ({ pos, heal: false, item: randomPickupWeapon(), readyAt: 0 })),
+      ...HEAL_SPOTS.map((pos) => ({ pos, heal: true, item: 1, readyAt: 0 })),
+    ];
 
     peer.on('connection', (conn) => this.onConnection(conn));
   }
@@ -228,12 +236,45 @@ export class HostServer {
     player.reloadEnd = performance.now() / 1000 + weapon.reloadTime - RELOAD_GRACE;
   }
 
-  // Switching cancels a reload; the new weapon can fire after SWITCH_TIME.
+  // Switching (Admin only) cancels a reload; the new weapon can fire after SWITCH_TIME.
   onWeapon(player, index) {
+    if (player.name !== ADMIN_NAME) return;
     if (player.dead || !Number.isInteger(index) || !WEAPONS[index] || index === player.weapon) return;
+    this.giveWeapon(player, index);
+  }
+
+  giveWeapon(player, index) {
     player.weapon = index;
     player.reloadEnd = 0;
     player.switchEnd = performance.now() / 1000 + SWITCH_TIME;
+  }
+
+  // A living player standing in a spot's circle takes what's there: a
+  // weapon if it's not the one they hold (full magazine), a heal pack if
+  // they're hurt (back to full health).
+  updatePickups(now) {
+    for (const spot of this.pickups) {
+      if (spot.item < 0) {
+        if (now >= spot.readyAt) spot.item = spot.heal ? 1 : randomPickupWeapon();
+        continue;
+      }
+      const [x, y, z] = spot.pos;
+      for (const p of this.players.values()) {
+        if (p.dead || (spot.heal ? p.hp >= MAX_HP : p.weapon === spot.item)) continue;
+        if (Math.hypot(p.pos[0] - x, p.pos[2] - z) > PICKUP_RADIUS || Math.abs(p.pos[1] - y) > 1.2) continue;
+        if (spot.heal) {
+          p.hp = MAX_HP;
+          this.sendTo(p.id, { t: 'heal', hp: p.hp });
+        } else {
+          this.giveWeapon(p, spot.item);
+          p.ammo[spot.item] = WEAPONS[spot.item].magSize;
+          this.sendTo(p.id, { t: 'pickup', w: spot.item });
+        }
+        spot.item = -1;
+        spot.readyAt = now + (spot.heal ? HEAL_RESPAWN : PICKUP_RESPAWN);
+        break;
+      }
+    }
   }
 
   // ---- tick --------------------------------------------------------------
@@ -250,10 +291,15 @@ export class HostServer {
         p.hp = MAX_HP;
         p.dead = false;
         p.ammo = WEAPONS.map((w) => w.magSize);
+        p.weapon = DEFAULT_WEAPON; // picked-up weapons are lost on death
+        p.reloadEnd = 0;
+        p.switchEnd = 0;
         p.protectedUntil = now + SPAWN_PROTECTION;
-        this.sendTo(p.id, { t: 'respawn', pos: p.pos, yaw: spawn.yaw });
+        this.sendTo(p.id, { t: 'respawn', pos: p.pos, yaw: spawn.yaw, w: p.weapon });
       }
     }
+
+    this.updatePickups(now);
 
     for (const p of this.players.values()) {
       if (p.reloadEnd && now >= p.reloadEnd) {
@@ -279,7 +325,11 @@ export class HostServer {
         rl: p.reloadEnd ? 1 : 0, // reloading (for the animation)
         sp: now < p.protectedUntil ? 1 : 0, // spawn-protected
       }));
-      this.broadcast({ t: 'snap', players }, false);
+      this.broadcast({
+        t: 'snap', players,
+        pk: this.pickups.map((s) => s.item), // what's on each spot (-1 = empty): weapon spots, then heal spots
+        pt: this.pickups.map((s) => (s.item < 0 ? round(Math.max(0, s.readyAt - now)) : 0)), // seconds until refilled
+      }, false);
     }
   }
 

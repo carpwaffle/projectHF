@@ -71,6 +71,37 @@ export const WEAPONS = [
 export const DEFAULT_WEAPON = WEAPONS.findIndex((w) => w.id === 'pistol'); // what everyone spawns with
 export const weaponIndex = (id) => WEAPONS.findIndex((w) => w.id === id);
 
+// Only the player with this name can switch weapons (number keys, Q, wheel).
+// Everyone else uses the spawn weapon until they pick another one up.
+export const ADMIN_NAME = 'Admin';
+
+// Weapon pickups: spots (game coordinates: x, floor height, z) marked with a
+// white circle. Walking over one holding a different weapon takes it (full
+// magazine) until you die or take another; the spot then stays empty for
+// PICKUP_RESPAWN seconds and gets a new random weapon (not the spawn pistol).
+export const PICKUP_SPOTS = [
+  [-19, 0.15, -40.41], // House04
+  [19, 0.15, 40.41], // House12
+  [45, 0, 0], // east end of the road
+  [-45, 0, 0], // west end of the road
+  [4.5, 12.15, 3.5], [-4.5, 12.15, -3.5], [3.5, 12.15, -4.5], [-3.5, 12.15, 4.5], // House08, 5th floor
+  [38, 3.16, -16], [-38, 3.16, 16], // House03 / House11 roofs
+  [0, 3.15, -28], [0, 3.15, 28], // middle of the House01 / House09 bridges
+];
+// Heal packs, marked with a green circle: walking over one while hurt heals
+// to full; the spot then refills after HEAL_RESPAWN seconds.
+export const HEAL_SPOTS = [
+  [-34.59, 9.15, -20.59], [34.59, 9.15, 20.59], // House05 / House13, 4th floor
+  [-17, 6.16, -17], [17, 6.16, 17], // House07 / House15 roofs
+  [17, 0.15, -37], [-17, 0.15, 37], // House01's north annex / House09's south annex (ground floor)
+  [4.5, 15.15, 0], [-4.5, 15.15, 0], // House08 roof
+];
+export const HEAL_RESPAWN = 20; // seconds
+export const PICKUP_RADIUS = 1.0; // the circle's (outer) radius
+export const PICKUP_RESPAWN = 20; // seconds
+export const PICKUP_WEAPONS = WEAPONS.map((_, i) => i).filter((i) => i !== DEFAULT_WEAPON);
+export const randomPickupWeapon = () => PICKUP_WEAPONS[Math.floor(Math.random() * PICKUP_WEAPONS.length)];
+
 // Damage of one shot / pellet at `distance` metres.
 export function shotDamage(weapon, headshot, distance) {
   const base = headshot ? weapon.headDamage : weapon.damage;

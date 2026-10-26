@@ -842,6 +842,13 @@ def twin(b):
                     windows=b.windows, roof_gaps=b.roof_gaps, railings=b.railings)
 
 
+# Roof pickup spots (src/shared.js; Blender coordinates, game z = -y): no AC
+# units within 2.5 m of these.
+ROOF_SPOTS = [(-17, 17), (17, -17), (38, 16), (-38, -16)]
+# Billboards on House07 / House15's roofs between their heal pack and House08
+# (cover from the tower): building-local, the side facing the centre.
+BILLBOARD_ROOFS = ('House07', 'House15')
+
 # Cover walls on the roads: (x, y, along_x), north/west ones; twins added.
 COVER = [(-2, 37, True), (-35, 4, False), (-25, 4, False), (-31, -4, False)]
 
@@ -922,7 +929,29 @@ def build_props(cols, buildings):
             m = Matrix.Translation((b.x, b.y, 0)) @ Matrix.Rotation(b.angle, 4, 'Z')
             for _ in range(b.rng.randint(1, 3)):
                 (i, j) = b.rng.choice(sorted(b.cells))
+                at = m @ Vector(((i + 0.5) * CELL, (j + 0.5) * CELL, b.top))
+                if any(math.hypot(at.x - x, at.y - y) < 2.5 for x, y in ROOF_SPOTS):
+                    continue  # keep pickup spots clear
                 place(cols, kit_mesh('Prop_ACUnit'), root, m @ Matrix.Translation(((i + 0.5) * CELL, (j + 0.5) * CELL, b.top)))
+    # Billboards: two posts and a panel (bullet-proof cover), across the roof
+    # 1.8 m from the middle, on the side facing the centre (local -Y for
+    # these 6 x 6 m buildings turned 45 degrees; their twins match).
+    vis, col = MeshBuilder(), MeshBuilder()
+    for b in buildings:
+        if b.name not in BILLBOARD_ROOFS:
+            continue
+        m = Matrix.Translation((b.x, b.y, 0)) @ Matrix.Rotation(b.angle, 4, 'Z')
+        z, y0, y1 = b.top, 1.1, 1.3
+        for px in (1.3, 4.7):  # posts, behind the panel
+            vis.box((px - 0.1, y1, z), (px + 0.1, y1 + 0.2, z + 3.3), m, 0)
+            col.box((px - 0.1, y1, z), (px + 0.1, y1 + 0.2, z + 3.3), m)
+        vis.box((0.8, y0, z + 0.3), (5.2, y1, z + 3.4), m, 1)  # the board
+        vis.box((0.75, y0 - 0.02, z + 0.25), (5.25, y1 + 0.02, z + 0.3), m, 0)  # frame, bottom
+        vis.box((0.75, y0 - 0.02, z + 3.4), (5.25, y1 + 0.02, z + 3.45), m, 0)  # frame, top
+        col.box((0.8, y0, z + 0.3), (5.2, y1, z + 3.4), m)
+    vis.finish(cols, 'Visual', 'Billboards_Generated', root,
+               materials=[material('MI_Trim_Dark'), material('MI_Trim_Green')], uv_scale=0.5)
+    col.finish(cols, 'Collision', 'COL_Billboards', root, wire=True)
     placed = 0
     while placed < 12:
         x, y = rng.uniform(-PLAY_R, PLAY_R), rng.uniform(-PLAY_R, PLAY_R)

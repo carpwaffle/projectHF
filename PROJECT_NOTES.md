@@ -1102,3 +1102,63 @@ least accurate: sniper 0.001 / 0.015 / 0.04 (scoped 0 / 0.008 / 0.04; was
 pistol = rifle 0.01 / 0.03 / 0.07 (the P90's old values), P90 0.014 / 0.04 /
 0.08, shotgun unchanged (0 / 0.02 / 0.05 plus its 0.07 pellet cone). At 30 m
 standing: sniper within 3 cm, revolver 6 cm, pistol / rifle 30 cm, P90 42 cm.
+
+## 28. Weapon switching for "Admin" only (2026-10-27)
+
+- Keys 1-6, Q and the mouse wheel switch weapon only for the player whose
+  name (as the host registered it) is exactly `Admin` (`ADMIN_NAME`,
+  `isAdmin()`, main.js); everyone else keeps the spawn weapon (pistol).
+  Client-side only, and anyone can type the name "Admin".
+
+## 29. Weapon pickups (2026-10-27)
+
+- `PICKUP_SPOTS` (shared.js, game coordinates incl. floor height, checked
+  with collision raycasts: >= 1.4 m from walls): House04 / House12 centre,
+  east / west road ends (x = +-45), House08 5th floor x4 (point-symmetric).
+- Host-authoritative (`updatePickups` in the tick): a spot holds a weapon
+  index or -1; a living player within `PICKUP_RADIUS` (1 m, horizontal;
+  1.2 m vertically) holding a different weapon gets it (`giveWeapon`: switch
+  time, reload cancelled, full magazine) and a `pickup` message; the spot
+  refills after `PICKUP_RESPAWN` (20 s) with `randomPickupWeapon()` (any but
+  the pistol). Same weapon: not taken (spare ammo is unlimited anyway).
+  Spot contents ride along in snapshots (`pk`). Respawn resets the weapon to
+  the pistol (`respawn` carries `w`).
+- The host now also rejects `weapon` messages from anyone not named
+  `ADMIN_NAME` (moved to shared.js). Non-admin HUD shows just the weapon name.
+- Client: white ring (RingGeometry 0.84-1.0 m, unlit, polygon offset) per
+  spot; the weapon floats 1 m up, spinning and bobbing, scaled up (x2.2
+  handguns, x1.4 long guns); reload-only parts hidden. Pickup feed line and a
+  bolt clack sound.
+- **Countdown**: while a spot is empty, a white number (seconds until the
+  next weapon, counting down) floats where the weapon would be. Snapshots
+  carry `pt` (seconds left per spot, from the host's clock, so client clocks
+  don't matter); the client counts down locally between snapshots. Canvas
+  sprite, redrawn only when the number changes.
+
+## 30. Heal packs; two more weapon spots (2026-10-27)
+
+- Weapon spots +2: House03 / House11 roofs (10 total). Random weapon still
+  never the pistol (checked: 5000 rolls, all five others ~equally).
+- `HEAL_SPOTS` (8): House05 / House13 4th floor (rows 0-1, clear of the
+  stairs), House07 / House15 roofs, House01's north annex / House09's south
+  annex (ground floor), House08 roof (x = +-4.5, beside the stair opening).
+  All checked with raycasts: flat, >= 1.8 m from walls.
+- Host pickups list = weapon spots then heal spots (`item`: weapon index /
+  1, -1 = empty); a heal pack is only taken by a hurt player: hp to MAX_HP,
+  `heal` message (green screen-edge flash, "Healed", clack), refills after
+  `HEAL_RESPAWN` (20 s) with the countdown.
+- Client: green ring; a white box with red crosses (canvas texture, shared
+  geometry/material) spinning above it.
+
+## 31. Billboards on House07/15; bridge weapon spots (2026-10-27)
+
+- Billboards (map_generator.py `build_props`, `BILLBOARD_ROOFS`): on House07 /
+  House15's roofs, 1.8 m from the heal pack towards House08 (building-local
+  -Y; the twin matches): two posts + a 4.4 x 3.1 m panel from 0.3 m up, with
+  collision (blocks players and bullets). Checked with rays from House08's
+  4F / 5F windows and its roof to a player's chest and head (+-0.6 m) on the
+  heal pack: all blocked, both houses. Panel uses MI_Trim_Green (shows as a
+  cream trim band), frame MI_Trim_Dark.
+- AC units on solid roofs keep 2.5 m from roof pickup spots (`ROOF_SPOTS`).
+- Weapon spots +2: middle of the House01 / House09 bridges (2nd floor,
+  y 3.15): 12 weapon spots.
