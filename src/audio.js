@@ -134,9 +134,11 @@ export function playSound(name, position = null, intensity = 1, variant = 'rifle
     return;
   }
   if (name === 'shot') {
-    const shot = SHOTS[variant] ?? SHOTS.rifle;
+    // '<weapon>_fast': the infinite ammo hack (bolt / pump worked twice as fast).
+    const fast = variant.endsWith('_fast');
+    const shot = SHOTS[fast ? variant.slice(0, -5) : variant] ?? SHOTS.rifle;
     playBuffer('shot', shot.range, position, intensity * shot.volume, 0, { rate: shot.rate });
-    (shot.after ?? []).forEach((at, i) => playBuffer(i ? 'boltForward' : 'boltBack', 'reload', position, 1, at));
+    (shot.after ?? []).forEach((at, i) => playBuffer(i ? 'boltForward' : 'boltBack', 'reload', position, 1, at * (fast ? 0.5 : 1)));
     return;
   }
   if (name === 'pickup') { // picking up a weapon: a quick mechanical clack-clack

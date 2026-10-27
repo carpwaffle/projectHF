@@ -29,7 +29,6 @@
         <button id="joinBtn">Join</button>
       </div>
       <p id="status"></p>
-      <p class="help">WASD move · Space jump · Mouse aim · Click shoot · R reload · 1-6/Q/wheel switch weapon (Admin only) · Right mouse scope (sniper) · M mute · Tab scores · Esc release mouse</p>
     </div>
   </div>
 
@@ -42,17 +41,38 @@
     <div id="protectMsg" hidden></div>
     <div id="damage"></div>
     <div id="heal"></div>
+    <div id="cash"></div>
     <div id="roomInfo"></div>
     <div id="teamScore"></div>
     <div id="killfeed"></div>
-    <div id="hp">100</div>
+    <div id="hp">200</div>
     <div id="scope" hidden></div>
     <div id="weaponName"></div>
     <div id="ammo"><span id="ammoCount">30</span> / <span id="magSize">30</span></div>
     <div id="reloadMsg" hidden>Reloading…</div>
     <div id="deadMsg" hidden>You died — respawning…</div>
     <div id="clickToPlay">Click to play</div>
+    <div id="money">$0</div>
+    <div id="hackName"></div>
+    <canvas id="minimap" width="220" height="220" hidden></canvas>
+    <div id="victory" hidden></div>
     <table id="scoreboard" hidden></table>
+  </div>
+
+  <!-- Shown on joining and after every death: pick the weapon to spawn with. -->
+  <div id="buyMenu" class="overlay" hidden>
+    <div class="panel buy">
+      <h2 id="buyTitle">Choose your loadout</h2>
+      <p id="buyInfo"></p>
+      <div id="buyMoney"></div>
+      <div class="buyCols">
+        <div><h3>Weapon</h3><div id="buyList" role="radiogroup"></div></div>
+        <div><h3>Hack</h3><div id="buyHacks" role="radiogroup"></div></div>
+      </div>
+      <div id="buyTotal"></div>
+      <button id="buyStart">Start</button>
+      <p class="help">WASD move · Space jump · Mouse aim · Click shoot · R reload · M mute · Tab scores · Esc release mouse</p>
+    </div>
   </div>
 
   <script type="module" src="src/main.js"></script>

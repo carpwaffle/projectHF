@@ -18,37 +18,63 @@ ES modules don't load from `file://`, so you need a local server. To play
 with friends over the internet, put these static files on any host, such as
 GitHub Pages, Netlify or itch.io.
 
-Controls: WASD move · Space jump · Mouse aim · Click shoot · R reload · 1-6 / Q / wheel switch weapon (only for the player named "Admin") · Right mouse scope (sniper) · M mute · Tab scoreboard · Esc release mouse.
+Controls: WASD move · Space jump · Mouse aim · Click shoot · R reload · Q / E fly up / down (fly hack) · Shift aim lock (aim hack) · 1-6 / wheel switch weapon (only for the player named "Admin") · Right mouse scope (sniper) · M mute · Tab scoreboard · Esc release mouse.
 
-Everyone spawns with the pistol. Other weapons are picked up: twelve spots
+**Hacks.** The core of the game: in the same menu you also buy one hack
+(separately from the weapon: you pay for both), active until your next death.
+Teammates can see each other's hacks on the scoreboard; the other team can't.
+
+| Hack | Price | Effect |
+|---|---|---|
+| Map | $300 | Minimap (lower left): every player, every pickup spot and its countdown |
+| Speed | $400 | Move 3x faster |
+| Recoil | $400 | 85% less spread |
+| Infinite ammo | $500 | No reloads; shotgun and sniper fire twice as fast |
+| Wall | $600 | See every player through walls: silhouette in their team colour plus hitboxes |
+| Fly | $700 | Q up, E down, hover otherwise; up to 25 m, inside the boundary; moves 1.3x faster |
+| No-clip | $800 | Walk through walls and ceilings (floors and the boundary still hold) |
+| HP | $800 | 1500 HP (heal packs still heal 100) |
+| Aim | $900 | Hold Shift: the view locks onto the head of the visible enemy nearest the crosshair |
+| Victory | $10,000 | Your team wins the round: 10 s victory screen, then a new round (money, kills and hacks reset) |
+
+**Money.** Everyone starts with $0 (the player named "Admin" with $999,999, for testing) and earns $4 for every second they stay
+alive (paid when they die) and $250 per kill; the scoreboard (Tab) and the
+bottom-left of the HUD show it. On joining and after every death a menu lets
+you pick the weapon to spawn with: the pistol is free, the others cost money
+(revolver $250, P90 / shotgun $400, rifle $500, sniper $650); what you can't
+afford is greyed out. Press Start to spawn (after the 2 s respawn delay).
+
+Other weapons are also picked up in the map: ten spots
 marked with a white circle (House04, House12, the east and west ends of the
-road, four on House08's 5th floor, the roofs of House03 and House11, and the
-middle of the House01 / House09 bridges) each
+road, four on House08's 5th floor, and the middle of the House01 / House09
+bridges) each
 offer a random weapon (not the pistol). Walk over the circle to take it, with a full magazine; you keep it
 until you pick up a different one or die (back to the pistol). An emptied spot
 shows a countdown and gets a new random weapon after 20 s. (The player named "Admin" can also switch
 freely with the keys below.)
 
-Heal packs (green circles: 4th floor of House05 / House13, roofs of House07 /
-House15, the north annex of House01 / south annex of House09, two on House08's
-roof; the House07 / House15 ones sit behind a billboard that hides them
-from House08) heal you to full when you walk over one while hurt; they refill after
-20 s, with the same countdown.
+Heal packs (green circles: 4th floor of House05 / House13, the north annex
+of House01 / south annex of House09, two on House08's roof) heal you by 100
+HP when you walk over one while hurt. Money spots (yellow circles, a gold
+coin: the roofs of House03 / House11 and House07 / House15, the latter behind
+a billboard that hides them from House08) give $1,000. Both refill after 20 s,
+with the same countdown.
 
-| Key | Weapon | Fire | Damage (body / head) | Rounds | Reload |
-|---|---|---|---|---|---|
-| 1 | Pistol | per click, 0.15 s | 30 / 75 | 12 | 1.6 s |
-| 2 | Revolver | per click, 0.35 s | 55 / 110 | 6 | 2.4 s |
-| 3 | Rifle | automatic, 0.15 s | 25 / 50 | 30 | 2.2 s |
-| 4 | P90 | automatic, 0.075 s | 17 / 34 | 50 | 2.5 s |
-| 5 | Shotgun | per click, pumped, 0.65 s | 8 pellets × 13 / 20, less with distance | 6 | 2.6 s |
-| 6 | Sniper | per click, bolt, 1 s; scope | 80 / 200 | 5 | 3 s |
+| Key | Weapon | Price | Fire | Damage (body / head) | Rounds | Reload |
+|---|---|---|---|---|---|---|
+| 1 | Pistol | free | per click, 0.15 s | 30 / 75 | 12 | 1.6 s |
+| 2 | Revolver | $250 | per click, 0.35 s | 55 / 110 | 6 | 2.4 s |
+| 3 | Rifle | $500 | automatic, 0.15 s | 25 / 50 | 30 | 2.2 s |
+| 4 | P90 | $400 | automatic, 0.075 s | 17 / 34 | 50 | 2.5 s |
+| 5 | Shotgun | $400 | per click, pumped, 0.65 s | 8 pellets × 13 / 20, less with distance | 6 | 2.6 s |
+| 6 | Sniper | $650 | per click, bolt, 1 s; scope | 80 / 200 | 5 | 3 s |
 
 Switching takes 0.45 s and cancels a reload. Press R to reload, or it reloads by itself
 when the magazine runs dry. Spare magazines are unlimited. Weapon stats live in
 `WEAPONS` in `src/shared.js`.
 
-Headshots do double damage (2 to kill, 4 body shots). Shots spread more
+Players have 200 HP. Headshots do extra damage (see the table: e.g. the rifle
+kills with 4 headshots or 8 body shots). Shots spread more
 while moving and most in the air; the crosshair ticks show how much. Most
 to least accurate: sniper (a little more so scoped), revolver, pistol and
 rifle, P90, shotgun. After

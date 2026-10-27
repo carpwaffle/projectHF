@@ -30,7 +30,7 @@
 
 import * as THREE from 'three';
 import { clone as cloneSkinned } from 'three/addons/utils/SkeletonUtils.js';
-import { PLAYER_HEIGHT, TEAMS, WEAPONS } from './shared.js';
+import { PLAYER_HEIGHT, TEAMS, WEAPONS, FAST_CYCLE } from './shared.js';
 import { SKINS, assets } from './assets.js';
 import { makeMuzzleFlash } from './effects.js';
 
@@ -485,7 +485,7 @@ export class Character {
     if (this.weaponId === 'shotgun') this.pumpStart = performance.now();
     if (this.weaponId === 'pistol') this.slideStart = performance.now();
     if (GUNS[this.weaponId].set === 'pistol') this.fireAt = performance.now();
-    this.onSound?.('shot', 1, this.weaponId);
+    this.onSound?.('shot', 1, this.fastCycle ? `${this.weaponId}_fast` : this.weaponId);
   }
 
   // state: { pos:[x,y,z], yaw, pitch, dead, vel?:[x,y,z], ground?, reloading?,
@@ -498,6 +498,7 @@ export class Character {
     if (dt <= 0) return;
     const pos = state.pos;
     if (state.weapon !== undefined) this.setWeapon(WEAPONS[state.weapon]?.id ?? 'rifle');
+    this.fastCycle = !!state.fast; // infinite ammo hack (known for us and teammates)
     const now = performance.now();
 
     // ---- velocity ----------------------------------------------------------
@@ -758,8 +759,9 @@ export class Character {
     const bones = this.gun.userData.bones;
     if (bones.Handle) {
       // Sniper bolt: after each shot, and to chamber a round at the end of a reload.
-      let bolt = (now - this.boltStart) / 1000 - BOLT_DELAY;
-      bolt = bolt >= 0 && bolt <= BOLT_TIME ? bolt / BOLT_TIME : -1;
+      const k = this.fastCycle ? FAST_CYCLE : 1; // infinite ammo hack: worked faster
+      let bolt = (now - this.boltStart) / 1000 - BOLT_DELAY * k;
+      bolt = bolt >= 0 && bolt <= BOLT_TIME * k ? bolt / (BOLT_TIME * k) : -1;
       const [b0, b1] = cfg.bolt;
       if (progress >= b0 && progress <= b1) bolt = (progress - b0) / (b1 - b0);
       const boltRoll = bolt < 0 ? 0 : Math.sin(Math.PI * bolt);
@@ -782,8 +784,9 @@ export class Character {
     const pumpCfg = this.gun.userData.points.pump;
     if (pumpCfg && bones[pumpCfg.bone]) {
       // Shotgun pump: back and forward after each shot, and at the end of a reload.
-      let p = (now - this.pumpStart) / 1000 - PUMP_DELAY;
-      p = p >= 0 && p <= PUMP_TIME ? p / PUMP_TIME : -1;
+      const k = this.fastCycle ? FAST_CYCLE : 1;
+      let p = (now - this.pumpStart) / 1000 - PUMP_DELAY * k;
+      p = p >= 0 && p <= PUMP_TIME * k ? p / (PUMP_TIME * k) : -1;
       if (progress >= cfg.pump[0] && progress <= cfg.pump[1]) p = (progress - cfg.pump[0]) / (cfg.pump[1] - cfg.pump[0]);
       this.pumpBack = p < 0 ? 0 : Math.sin(Math.PI * p);
       this.gun.rotation.set(pitch, 0, roll);

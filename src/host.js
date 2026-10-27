@@ -5,8 +5,9 @@
 
 import {
   SNAPSHOT_RATE, MAX_HP, RESPAWN_TIME, EYE_HEIGHT, MAX_RANGE, TEAMS,
-  WEAPONS, DEFAULT_WEAPON, SWITCH_TIME, SPAWN_PROTECTION, shotDamage, ADMIN_NAME,
-  PICKUP_SPOTS, PICKUP_RADIUS, PICKUP_RESPAWN, randomPickupWeapon, HEAL_SPOTS, HEAL_RESPAWN,
+  WEAPONS, DEFAULT_WEAPON, SWITCH_TIME, SPAWN_PROTECTION, shotDamage, ADMIN_NAME, ADMIN_MONEY,
+  PICKUP_RADIUS, PICKUP_RESPAWN, randomPickupWeapon, HEAL_RESPAWN, ALL_SPOTS, MONEY_AMOUNT, MONEY_RESPAWN,
+  SURVIVAL_RATE, KILL_REWARD, HACKS, hackId, HACK_HP, HEAL_AMOUNT, VICTORY_SCREEN, fireCooldown,
   pickSpawn, lookDir, headAABB, bodyAABB, rayAABB, normalize,
 } from './shared.js';
 import { SKINS } from './assets.js';
@@ -29,13 +30,11 @@ export class HostServer {
     this.players = new Map();
     this.conns = new Map(); // clientId -> { rel, state }
     this.lastSnapshot = 0;
-    // Pickups: the weapon spots, then the heal spots. item: the weapon on
-    // offer (index into WEAPONS) / 1 for a heal pack, -1 = empty; readyAt:
-    // when an empty one refills.
-    this.pickups = [
-      ...PICKUP_SPOTS.map((pos) => ({ pos, heal: false, item: randomPickupWeapon(), readyAt: 0 })),
-      ...HEAL_SPOTS.map((pos) => ({ pos, heal: true, item: 1, readyAt: 0 })),
-    ];
+    this.roundOverAt = 0; // host time (s) the victory screen ends (0 = round in progress)
+    // Pickups (ALL_SPOTS: weapon, heal and money spots). item: the weapon
+    // on offer (index into WEAPONS) / 1 for a heal pack or money, -1 =
+    // empty; readyAt: when an empty one refills.
+    this.pickups = ALL_SPOTS.map(({ pos, kind }) => ({ pos, kind, item: this.refill(kind), readyAt: 0 }));
 
     peer.on('connection', (conn) => this.onConnection(conn));
   }
@@ -80,18 +79,34 @@ export class HostServer {
       pitch: 0,
       hp: MAX_HP,
       score: 0,
-      dead: false,
+      money: 0, // (set below)
+      // Not in the world until they've picked a weapon (the buy menu): joining
+      // players and the dead. spawnWeapon: their pick (-1 = none yet).
+      dead: true,
+      joining: true,
+      spawnWeapon: -1,
+      spawnHack: 0,
+      hack: 0, // index into HACKS, until the next death
+      maxHp: MAX_HP,
+      spawnedAt: 0,
       respawnAt: 0,
       lastShot: 0,
       weapon: DEFAULT_WEAPON, // index into WEAPONS
       ammo: WEAPONS.map((w) => w.magSize), // per weapon
       switchEnd: 0, // host time (s) the weapon switch finishes (can't fire before)
       reloadEnd: 0, // host time (s) the current reload finishes, 0 = not reloading
-      protectedUntil: performance.now() / 1000 + SPAWN_PROTECTION,
+      protectedUntil: 0,
     };
+    player.money = this.startMoney(player);
     this.players.set(id, player);
     this.sendTo(id, { t: 'welcome', id, pos: player.pos, yaw: spawn.yaw, team });
+    this.sendTo(id, { t: 'buy', money: player.money, wait: 0 });
     this.broadcast({ t: 'feed', text: `${player.name} joined ${TEAMS[team].name}` });
+  }
+
+  // Everyone starts a round with $0; Admin with ADMIN_MONEY (for testing).
+  startMoney(player) {
+    return player.name === ADMIN_NAME ? ADMIN_MONEY : 0;
   }
 
   // The team with fewer players (random on a tie).
@@ -142,6 +157,7 @@ export class HostServer {
     else if (msg.t === 'shoot') this.onShoot(player, msg);
     else if (msg.t === 'reload') this.onReload(player);
     else if (msg.t === 'weapon') this.onWeapon(player, msg.w);
+    else if (msg.t === 'spawn') this.onSpawn(player, msg.w, msg.h ?? 0);
   }
 
   // Clients simulate their own movement and report the result. We trust it,
@@ -161,11 +177,12 @@ export class HostServer {
     const now = performance.now() / 1000;
     const weapon = WEAPONS[shooter.weapon];
     if (msg.w !== undefined && msg.w !== shooter.weapon) return; // fired before our switch arrived
-    if (shooter.dead || now - shooter.lastShot < weapon.cooldown * 0.9 || now < shooter.switchEnd - 0.1) return;
-    if (shooter.reloadEnd || shooter.ammo[shooter.weapon] <= 0) return; // no shooting while reloading or empty
+    const infinite = hackId(shooter.hack) === 'ammo';
+    if (shooter.dead || now - shooter.lastShot < fireCooldown(weapon, shooter.hack) * 0.9 || now < shooter.switchEnd - 0.1) return;
+    if (!infinite && (shooter.reloadEnd || shooter.ammo[shooter.weapon] <= 0)) return; // no shooting while reloading or empty
     if (!Number.isFinite(msg.yaw) || !Number.isFinite(msg.pitch)) return;
     shooter.lastShot = now;
-    shooter.ammo[shooter.weapon] -= 1;
+    if (!infinite) shooter.ammo[shooter.weapon] -= 1;
     shooter.protectedUntil = 0; // firing ends spawn protection
 
     const origin = [shooter.pos[0], shooter.pos[1] + EYE_HEIGHT, shooter.pos[2]];
@@ -225,14 +242,24 @@ export class HostServer {
       victim.dead = true;
       victim.respawnAt = now + RESPAWN_TIME;
       victim.reloadEnd = 0;
+      victim.spawnWeapon = -1;
+      victim.hack = 0; // hacks last until death
+      victim.maxHp = MAX_HP;
       shooter.score += 1;
+      // Money: the victim for the time they stayed alive, the killer per kill.
+      const alive = now - victim.spawnedAt;
+      const earned = Math.round(alive * SURVIVAL_RATE);
+      victim.money += earned;
+      shooter.money += KILL_REWARD;
+      this.sendTo(victim.id, { t: 'buy', money: victim.money, wait: RESPAWN_TIME, earned, alive: Math.round(alive) });
+      this.sendTo(shooter.id, { t: 'earn', amount: KILL_REWARD, money: shooter.money });
       this.broadcast({ t: 'feed', text: `${shooter.name} ➜ ${victim.name}${headshot ? ' (headshot)' : ''}` });
     }
   }
 
   onReload(player) {
     const weapon = WEAPONS[player.weapon];
-    if (player.dead || player.reloadEnd || player.ammo[player.weapon] >= weapon.magSize) return;
+    if (player.dead || player.reloadEnd || player.ammo[player.weapon] >= weapon.magSize || hackId(player.hack) === 'ammo') return;
     player.reloadEnd = performance.now() / 1000 + weapon.reloadTime - RELOAD_GRACE;
   }
 
@@ -243,35 +270,52 @@ export class HostServer {
     this.giveWeapon(player, index);
   }
 
+  // The buy menu's Start: spawn with that weapon and hack (when the respawn
+  // delay is over, if they can afford both; charged at the spawn).
+  onSpawn(player, index, hack) {
+    if (!player.dead || !Number.isInteger(index) || !WEAPONS[index] || !Number.isInteger(hack) || !HACKS[hack]) return;
+    if (WEAPONS[index].price + HACKS[hack].price > player.money) return;
+    player.spawnWeapon = index;
+    player.spawnHack = hack;
+  }
+
   giveWeapon(player, index) {
     player.weapon = index;
     player.reloadEnd = 0;
     player.switchEnd = performance.now() / 1000 + SWITCH_TIME;
   }
 
+  refill(kind) {
+    return kind === 'weapon' ? randomPickupWeapon() : 1;
+  }
+
   // A living player standing in a spot's circle takes what's there: a
   // weapon if it's not the one they hold (full magazine), a heal pack if
-  // they're hurt (back to full health).
+  // they're hurt, money always.
   updatePickups(now) {
     for (const spot of this.pickups) {
       if (spot.item < 0) {
-        if (now >= spot.readyAt) spot.item = spot.heal ? 1 : randomPickupWeapon();
+        if (now >= spot.readyAt) spot.item = this.refill(spot.kind);
         continue;
       }
       const [x, y, z] = spot.pos;
       for (const p of this.players.values()) {
-        if (p.dead || (spot.heal ? p.hp >= MAX_HP : p.weapon === spot.item)) continue;
+        if (p.dead) continue;
+        if (spot.kind === 'heal' ? p.hp >= p.maxHp : spot.kind === 'weapon' && p.weapon === spot.item) continue;
         if (Math.hypot(p.pos[0] - x, p.pos[2] - z) > PICKUP_RADIUS || Math.abs(p.pos[1] - y) > 1.2) continue;
-        if (spot.heal) {
-          p.hp = MAX_HP;
+        if (spot.kind === 'heal') {
+          p.hp = Math.min(p.maxHp, p.hp + HEAL_AMOUNT);
           this.sendTo(p.id, { t: 'heal', hp: p.hp });
+        } else if (spot.kind === 'money') {
+          p.money += MONEY_AMOUNT;
+          this.sendTo(p.id, { t: 'cash', amount: MONEY_AMOUNT, money: p.money });
         } else {
           this.giveWeapon(p, spot.item);
           p.ammo[spot.item] = WEAPONS[spot.item].magSize;
           this.sendTo(p.id, { t: 'pickup', w: spot.item });
         }
         spot.item = -1;
-        spot.readyAt = now + (spot.heal ? HEAL_RESPAWN : PICKUP_RESPAWN);
+        spot.readyAt = now + ({ heal: HEAL_RESPAWN, money: MONEY_RESPAWN }[spot.kind] ?? PICKUP_RESPAWN);
         break;
       }
     }
@@ -284,22 +328,9 @@ export class HostServer {
   tick() {
     const now = performance.now() / 1000;
 
-    for (const p of this.players.values()) {
-      if (p.dead && now >= p.respawnAt) {
-        const spawn = this.spawnPoint(p.team, p.id);
-        p.pos = spawn.pos;
-        p.hp = MAX_HP;
-        p.dead = false;
-        p.ammo = WEAPONS.map((w) => w.magSize);
-        p.weapon = DEFAULT_WEAPON; // picked-up weapons are lost on death
-        p.reloadEnd = 0;
-        p.switchEnd = 0;
-        p.protectedUntil = now + SPAWN_PROTECTION;
-        this.sendTo(p.id, { t: 'respawn', pos: p.pos, yaw: spawn.yaw, w: p.weapon });
-      }
-    }
-
-    this.updatePickups(now);
+    if (this.roundOverAt && now >= this.roundOverAt) this.newRound();
+    if (!this.roundOverAt) this.spawnPlayers(now); // (victory screen: nobody spawns)
+    if (!this.roundOverAt) this.updatePickups(now);
 
     for (const p of this.players.values()) {
       if (p.reloadEnd && now >= p.reloadEnd) {
@@ -308,28 +339,98 @@ export class HostServer {
       }
     }
 
-    if (now - this.lastSnapshot >= 1 / SNAPSHOT_RATE) {
-      this.lastSnapshot = now;
-      const players = [...this.players.values()].map((p) => ({
-        id: p.id,
-        name: p.name,
-        skin: p.skin,
-        team: p.team,
-        p: p.pos.map(round),
-        yaw: round(p.yaw),
-        pitch: round(p.pitch),
-        hp: p.hp,
-        score: p.score,
-        dead: p.dead,
-        w: p.weapon,
-        rl: p.reloadEnd ? 1 : 0, // reloading (for the animation)
-        sp: now < p.protectedUntil ? 1 : 0, // spawn-protected
-      }));
-      this.broadcast({
-        t: 'snap', players,
-        pk: this.pickups.map((s) => s.item), // what's on each spot (-1 = empty): weapon spots, then heal spots
-        pt: this.pickups.map((s) => (s.item < 0 ? round(Math.max(0, s.readyAt - now)) : 0)), // seconds until refilled
-      }, false);
+    if (now - this.lastSnapshot >= 1 / SNAPSHOT_RATE) this.sendSnapshots(now);
+  }
+
+  // Players whose buy-menu pick is in and whose respawn delay is over.
+  spawnPlayers(now) {
+    for (const p of this.players.values()) {
+      if (p.dead && p.spawnWeapon >= 0 && now >= p.respawnAt) {
+        const price = WEAPONS[p.spawnWeapon].price + HACKS[p.spawnHack].price;
+        if (price > p.money) { p.spawnWeapon = -1; continue; }
+        p.money -= price;
+        if (hackId(p.spawnHack) === 'victory') {
+          this.victory(p, now);
+          return; // (round over)
+        }
+        const spawn = this.spawnPoint(p.team, p.id);
+        p.pos = spawn.pos;
+        p.hack = p.spawnHack;
+        p.maxHp = hackId(p.hack) === 'hp' ? HACK_HP : MAX_HP;
+        p.hp = p.maxHp;
+        p.dead = false;
+        p.ammo = WEAPONS.map((w) => w.magSize);
+        p.weapon = p.spawnWeapon; // the one they bought (picked-up weapons are lost on death)
+        p.spawnWeapon = -1;
+        p.joining = false;
+        p.spawnedAt = now;
+        p.reloadEnd = 0;
+        p.switchEnd = 0;
+        p.protectedUntil = now + SPAWN_PROTECTION;
+        this.sendTo(p.id, { t: 'respawn', pos: p.pos, yaw: spawn.yaw, w: p.weapon, h: p.hack, hp: p.hp, money: p.money });
+      }
+    }
+  }
+
+  sendSnapshots(now) {
+    this.lastSnapshot = now;
+    const all = [...this.players.values()];
+    const players = all.map((p) => ({
+      id: p.id,
+      name: p.name,
+      skin: p.skin,
+      team: p.team,
+      p: p.pos.map(round),
+      yaw: round(p.yaw),
+      pitch: round(p.pitch),
+      hp: p.hp,
+      score: p.score,
+      dead: p.dead,
+      w: p.weapon,
+      rl: p.reloadEnd ? 1 : 0, // reloading (for the animation)
+      sp: now < p.protectedUntil ? 1 : 0, // spawn-protected
+      m: p.money,
+      gone: p.dead && (p.joining || now >= p.respawnAt) ? 1 : 0, // in the buy menu: not drawn
+    }));
+    const pk = this.pickups.map((s) => s.item); // what's on each spot (-1 = empty), in ALL_SPOTS order
+    const pt = this.pickups.map((s) => (s.item < 0 ? round(Math.max(0, s.readyAt - now)) : 0)); // seconds until refilled
+    // Hacks are secret from the other team: each team's snapshot carries
+    // only its own players' hacks (h).
+    const byTeam = [0, 1].map((team) => ({
+      t: 'snap', pk, pt,
+      players: players.map((s, i) => (all[i].team === team ? { ...s, h: all[i].hack } : s)),
+    }));
+    for (const p of all) this.sendTo(p.id, byTeam[p.team], false);
+  }
+
+  // Someone bought the victory hack: their team wins. Everyone leaves the
+  // world for the victory screen; then a new round starts from scratch.
+  victory(player, now) {
+    this.roundOverAt = now + VICTORY_SCREEN;
+    for (const p of this.players.values()) {
+      p.dead = true;
+      p.joining = true;
+      p.spawnWeapon = -1;
+      p.reloadEnd = 0;
+      p.hack = 0;
+    }
+    this.broadcast({ t: 'victory', team: player.team, by: player.name, time: VICTORY_SCREEN });
+    this.broadcast({ t: 'feed', text: `${player.name} hacked the game: ${TEAMS[player.team].name} wins!` });
+  }
+
+  newRound() {
+    this.roundOverAt = 0;
+    for (const p of this.players.values()) {
+      Object.assign(p, {
+        money: this.startMoney(p), score: 0, hack: 0, maxHp: MAX_HP, hp: MAX_HP, dead: true, joining: true,
+        spawnWeapon: -1, spawnHack: 0, respawnAt: 0, weapon: DEFAULT_WEAPON,
+      });
+      p.ammo = WEAPONS.map((w) => w.magSize);
+      this.sendTo(p.id, { t: 'buy', money: p.money, wait: 0, round: true });
+    }
+    for (const spot of this.pickups) {
+      spot.item = this.refill(spot.kind);
+      spot.readyAt = 0;
     }
   }
 

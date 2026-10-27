@@ -1162,3 +1162,131 @@ standing: sniper within 3 cm, revolver 6 cm, pistol / rifle 30 cm, P90 42 cm.
 - AC units on solid roofs keep 2.5 m from roof pickup spots (`ROOF_SPOTS`).
 - Weapon spots +2: middle of the House01 / House09 bridges (2nd floor,
   y 3.15): 12 weapon spots.
+
+## 32. Money and the buy menu (2026-10-27)
+
+- `WEAPONS[].price` (pistol 0, revolver 250, P90 / shotgun 400, rifle 500,
+  sniper 650), `SURVIVAL_RATE` ($3 per second alive, paid on death),
+  `KILL_REWARD` ($150). Host-owned (`player.money`), sent in snapshots (`m`)
+  for the scoreboard's Money column and the HUD.
+- Spawning goes through the buy menu: players join dead (`joining`), get
+  `buy` {money, wait, earned?, alive?}; after a kill the victim gets `buy`
+  (wait = RESPAWN_TIME), the killer `earn`. The client's Start sends
+  `spawn` {w}; the host stores `spawnWeapon` (rejected if unaffordable) and
+  the tick spawns them once `respawnAt` passes, charging the price then;
+  `respawn` carries the weapon and money. No more automatic respawn.
+- Players in the menu (joining, or dead longer than RESPAWN_TIME) are
+  flagged `gone` in snapshots and not drawn.
+- Menu: radio list (name, price; unaffordable greyed / disabled), last
+  choice remembered (falls back to the pistol), "Start in x.x" countdown,
+  releases the mouse while open; Start re-locks it.
+- **Fix: buy menu had no mouse pointer on joining.** Host / Join locked the
+  pointer (`enterGame`) right after the host's own `buy` message had opened
+  the menu, so the camera turned and there was no cursor. Now nothing locks
+  the pointer until Start; while the menu is open (before Start) any lock
+  is released and mouse look / firing are ignored.
+
+## 33. Hacks (2026-10-28)
+
+The game's core: one hack per life, bought in the buy menu next to the
+weapon (both paid for), active until death. `HACKS` in shared.js (index =
+network number): none, map 300, speed 400, recoil 400, ammo 500, wall 600,
+fly 700, noclip 800, aim 900, hp 1200, victory 10000.
+
+- **Host**: `spawn` {w, h}; both prices charged at the spawn; `hack`,
+  `maxHp` (HP hack: `HACK_HP` 9999) set then, cleared on death. Heal packs
+  heal `HEAL_AMOUNT` (100) up to maxHp, only if hurt. Infinite ammo: shots
+  don't use ammo, reloads refused, `fireCooldown()` halves the shotgun and
+  sniper cooldown (`FAST_CYCLE`). Snapshots are per team (`sendSnapshots`):
+  `h` (hack) only on that team's players, so enemies' hacks stay secret
+  (scoreboard Hack column: teammates and us).
+- **Victory**: buying it ends the round (`victory`): everyone out of the
+  world, `victory` message, 10 s (`VICTORY_SCREEN`), then `newRound`: money,
+  kills, hacks reset, pickups refilled, everyone gets `buy` {round: true}.
+- **Movement** (world.js `stepPlayer` input): `speed` multiplier
+  (`SPEED_HACK` 1.8); `fly` (-1..1 from Q / E: vertical speed `FLY_SPEED` 6,
+  no gravity, hovers, capped at `FLY_MAX_Y` 20 m, normal collision);
+  `noclip` (`substepNoclip`: no wall / ceiling collision; floors from a
+  downward ray up to 0.5 m above the feet (stairs), following floors down
+  while grounded; gravity; `keepInside` boundary). Movement is client-side
+  and trusted, like before.
+- **Recoil**: spread x `RECOIL_HACK` (0.15); flying counts as on the ground
+  for spread; speed hack doesn't add movement spread beyond normal running.
+- **Aim** (main.js `aimLock`, Shift held): nearest enemy head (headAABB
+  centre of the drawn avatar) by angle from the view, on screen, with a
+  clear line (world raycast); sets yaw / pitch exactly.
+- **Wall** (render.js `renderWallHack`): avatars' skinned meshes on layer
+  1 / 2 by team; extra passes with an override material (team colour, 38%,
+  no depth test) and an `xrayScene` of hitbox edge boxes (headAABB /
+  bodyAABB); scene background / fog hidden for those passes so nothing is
+  cleared.
+- **Map** (minimap.js): 220 px canvas lower left, north-up, 30 fps; the
+  background is a 160x160 height raycast of the collision map (made once);
+  pickup dots (white / green) or their countdown when empty; players as team
+  dots, us as an arrow. HP / money / hack name moved to the right.
+- **Infinite ammo visuals**: `fast` state halves the bolt / pump animation
+  and sound timings (us and teammates; enemies' hacks are unknown).
+- Q no longer switches weapons (Admin: number keys / wheel).
+- Verified in the browser: speed 12.6 vs 7.0 m/s; fly 6 m/s, ceiling 20 m,
+  hover, landing, boundary 48.5; no-clip through solid House03 at floor
+  height (normally stopped at its wall); HP 9999, -5000, heal +100; sniper
+  7 shots in 3 s, ammo unchanged, reload refused, HUD "∞"; spread 0.0015
+  vs 0.0100; teammate hack shown / enemy hidden; wall hack silhouette and
+  hitboxes through House02's wall; aim lock 0.000° off the head and a host
+  headshot, none behind a cover wall or without the hack; minimap; victory
+  screen, new round with $0 / 0 kills / pickups refilled.
+- (Testing) the player named `Admin` starts with `ADMIN_MONEY` ($999,999)
+  on joining and at every new round (`startMoney` in host.js).
+- Retuned (2026-10-28): speed hack 1.8 -> 2.5x (`SPEED_HACK`); fly hack
+  moves 1.3x faster (`FLY_HACK_SPEED`) with its ceiling at 25 m
+  (`FLY_MAX_Y`); HP hack 9999 -> 1500 HP (`HACK_HP`), $1,200 -> $800 (listed
+  after no-clip). Measured: 7.0 / 17.5 / 9.1 m in 1 s (none / speed / fly),
+  fly stops at 25.0 m, HP hack 1500.
+- Speed hack 2.5 -> 3.0x (2026-10-28).
+
+## 34. Money spots (2026-10-28)
+
+- The House03 / House11 roof weapon spots and the House07 / House15 roof heal
+  spots became money spots (`MONEY_SPOTS`, $800 `MONEY_AMOUNT`, 20 s
+  `MONEY_RESPAWN`): 10 weapon, 6 heal, 4 money spots. Anyone alive takes
+  money (no condition). `cash` message: yellow screen-edge flash, "+$800".
+- Spots are now one list with kinds, `ALL_SPOTS` (weapon, heal, money; the
+  order host and clients share). Host pickups carry `kind` (`refill(kind)`);
+  renderer rings white / green / yellow, a gold "$" coin (canvas texture on
+  a cylinder) over money spots; minimap dots in the same colours.
+- Fixed while at it: a spot's refill time mixed `+` and `??` without
+  brackets (weapon spots would have got NaN).
+- Money spot amount $800 -> $1,000 (2026-10-28).
+- Default HP 100 -> 200 (`MAX_HP`, 2026-10-28): rifle 8 body / 4 head shots, sniper 3 body / 1 head; heal packs still +100.
+- Rewards up with the HP (2026-10-28): survival $3 -> $4 per second, kill $150 -> $250.
+- Controls help moved from the host / join menu to the bottom of the buy menu, trimmed to: WASD, Space, mouse, click, R, M, Tab, Esc (fly / aim keys are in the hack descriptions; the scope is intuitive; Admin keys omitted). README keeps the full list. (2026-10-28)
+
+## 35. Horizon: no visible map edge (2026-10-28)
+
+The ground used to end ~5 m past the facade ring (at ~55 m) with flat sky
+colour behind it; the fog only started at 80 m. Now (render.js
+`buildHorizon`, runtime only: no map rebuild / re-bake):
+- **Gradient sky**: a dome (r 150, follows the camera, drawn first with no
+  depth) from `HORIZON` (#c9dcec, also the fog colour) at and below the
+  horizon to `ZENITH` (#6f9fd8) overhead; tone-mapped in its shader like the
+  fogged scene so they meet without a seam.
+- **Ground**: an unlit asphalt ring from 52 to 320 m, just under the map's.
+- **Skyline**: 3 rings of plain towers (r ~80 / 115 / 155 m, taller further
+  out, point-symmetric, seeded), one InstancedMesh, unlit flat colours
+  pre-hazed towards `HORIZON` with distance, then fogged.
+- Fog 70-185 m (was 80-190; camera far plane 200), so everything is fully
+  haze before the far plane. No measurable frame-time change (8.3 ms median).
+- **Boundary as blocks** (map_generator.py `build_ring`): the inward-facing
+  kit facades (2-3 storeys) replaced by plain blocks in the skyline's style:
+  each 12 m segment is 2-3 blocks (7-15 m tall, 5-11 m deep) built
+  OUTWARD from the ring line (where the facades stood; `rot_for_normal`
+  puts local +y away from the centre), a taller 3.2 m block just outside
+  each joint. (First version had the sign wrong: blocks reached up to 11 m
+  into the arena, covering the road-end weapon spots and cutting into
+  buildings. Checked now: closest block vertex 49.4 m from the centre, play
+  radius 48.5; road-end spots 4.4 m clear and picked up by walking in.)
+  three flat materials (`plain_material`: grey / warm / dark; dark-ish base
+  colours because the unlit map multiplies them by the bright lightmap: the
+  first try at ~0.3 linear rendered almost white). Point-symmetric like
+  before. Map 107k -> 49k triangles, 3.4 -> 1.9 MB; 9 -> 12 draw calls.
+- Boundary blocks lightened to sit with the skyline (base colours ~0.13-0.21 linear, bluish grey). (2026-10-28)

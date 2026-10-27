@@ -5,7 +5,7 @@
 import {
   STATE_SEND_RATE, INTERP_DELAY, EYE_HEIGHT, MAX_HP, MOVE_SPEED,
   MAX_RANGE, TEAMS, WEAPONS, DEFAULT_WEAPON, SWITCH_TIME, RESPAWN_TIME, SPAWN_PROTECTION,
-  ADMIN_NAME, PICKUP_SPOTS, lookDir, playerAABB, rayAABB, spreadFor, spreadDir,
+  ADMIN_NAME, PICKUP_SPOTS, HACKS, hackId, SPEED_HACK, FLY_HACK_SPEED, RECOIL_HACK, fireCooldown, headAABB, lookDir, playerAABB, rayAABB, spreadFor, spreadDir,
 } from './shared.js';
 import { makeRoomCode, openHostPeer, joinRoom } from './net.js';
 import { HostServer, HOST_ID } from './host.js';
@@ -13,6 +13,7 @@ import { Renderer } from './render.js';
 import { loadAssets, loadMap } from './assets.js';
 import { World } from './world.js';
 import { unlockAudio, playSound, setListener, toggleMute, audioDebug } from './audio.js';
+import { Minimap } from './minimap.js';
 
 const $ = (id) => document.getElementById(id);
 const canvas = $('view');
@@ -25,6 +26,7 @@ $('hostBtn').disabled = true;
 $('joinBtn').disabled = true;
 $('status').textContent = 'Loading models…';
 let world;
+const minimap = new Minimap($('minimap'), () => world, renderer);
 try {
   const [, map] = await Promise.all([loadAssets(renderer.renderer), loadMap(renderer.renderer)]);
   world = new World(map.collision, map.meta);
@@ -46,7 +48,9 @@ let myTeam = 0;
 let roomLabel = '';
 const me = {
   pos: [0, 0, 0], vel: [0, 0, 0], onGround: true, yaw: 0, pitch: 0, hp: MAX_HP, dead: false,
-  weapon: DEFAULT_WEAPON, lastWeapon: WEAPONS.findIndex((w) => w.id === 'rifle'), // index into WEAPONS (Q: last weapon)
+  money: 0,
+  hack: 0, // index into HACKS, until our next death
+  weapon: DEFAULT_WEAPON, lastWeapon: WEAPONS.findIndex((w) => w.id === 'rifle'), // index into WEAPONS
   ammo: WEAPONS.map((w) => w.magSize), // per weapon
   reloadEnd: 0, // performance.now() ms when the reload finishes, 0 = not reloading
   switchEnd: 0, // performance.now() ms when the weapon switch finishes
@@ -77,11 +81,11 @@ window.addEventListener('keydown', (e) => {
   if (e.code === 'Tab' && session) { e.preventDefault(); $('scoreboard').hidden = false; }
   if (e.code === 'KeyR' && session && locked()) startReload(performance.now());
   if (e.code === 'KeyM' && session) addFeed(toggleMute() ? 'Sound off (M)' : 'Sound on (M)');
-  // Weapon switching (number keys, Q, wheel): only for the player named "Admin".
+  // Weapon switching (number keys, wheel): only for the player named "Admin".
+  // (Q / E: the fly hack.)
   if (session && locked() && isAdmin()) {
     const digit = /^Digit(\d)$/.exec(e.code);
     if (digit && WEAPONS[digit[1] - 1]) switchWeapon(digit[1] - 1, performance.now());
-    if (e.code === 'KeyQ') switchWeapon(me.lastWeapon, performance.now());
   }
 });
 window.addEventListener('wheel', (e) => {
@@ -98,16 +102,16 @@ window.addEventListener('blur', () => { keys.clear(); mouseDown = false; aimHeld
 // Rejects when not triggered by a user gesture (e.g. after an await); the
 // "Click to play" prompt covers that case.
 const requestLock = () => Promise.resolve(canvas.requestPointerLock()).catch(() => {});
-canvas.addEventListener('click', () => { if (session && !locked()) requestLock(); });
+canvas.addEventListener('click', () => { if (session && !locked() && $('buyMenu').hidden) requestLock(); });
 document.addEventListener('pointerlockchange', () => { $('clickToPlay').hidden = locked(); });
 document.addEventListener('mousemove', (e) => {
-  if (!locked()) return;
+  if (!locked() || buy) return; // (no looking around in the buy menu)
   const sensitivity = 0.0022 * (renderer.camera.fov / BASE_FOV); // slower when zoomed in
   me.yaw -= e.movementX * sensitivity;
   me.pitch = Math.max(-1.55, Math.min(1.55, me.pitch - e.movementY * sensitivity));
 });
 document.addEventListener('mousedown', (e) => {
-  if (!locked()) return;
+  if (!locked() || buy) return;
   if (e.button === 0) { mouseDown = true; triggerPressed = true; }
   if (e.button === 2) aimHeld = true;
 });
@@ -124,6 +128,9 @@ function readMoveInput() {
     right: k('KeyD') - k('KeyA'),
     jump: !!k('Space'),
     yaw: me.yaw,
+    speed: speedHack(),
+    fly: hack() === 'fly' ? k('KeyQ') - k('KeyE') : undefined,
+    noclip: hack() === 'noclip',
   };
 }
 
@@ -132,6 +139,7 @@ function readMoveInput() {
 function onMessage(msg) {
   switch (msg.t) {
     case 'welcome':
+      me.dead = true; // until we pick a weapon in the buy menu
       myId = msg.id;
       myTeam = msg.team ?? 0;
       renderer.setLocalTeam(myTeam);
@@ -148,6 +156,7 @@ function onMessage(msg) {
       if (mine) {
         me.hp = mine.hp;
         me.dead = mine.dead;
+        me.money = mine.m ?? 0;
         renderer.setViewmodel(mine.skin); // first-person body in our own skin
       }
       for (const id of renderer.avatars.keys()) if (!players.has(id)) renderer.removeAvatar(id);
@@ -177,9 +186,22 @@ function onMessage(msg) {
         }
       }
       break;
+    case 'buy': // joined, or died: pick the weapon to spawn with
+      openBuyMenu(msg);
+      break;
+    case 'earn':
+      me.money = msg.money;
+      addFeed(`+$${msg.amount} for the kill`);
+      break;
+    case 'victory':
+      showVictory(msg);
+      break;
     case 'respawn':
+      closeBuyMenu();
+      if (msg.money !== undefined) me.money = msg.money;
+      me.hack = msg.h ?? 0;
       teleport(msg.pos, msg.yaw);
-      me.hp = MAX_HP;
+      me.hp = msg.hp ?? MAX_HP;
       me.dead = false;
       deathInfo = null;
       me.protectedUntil = performance.now() + SPAWN_PROTECTION * 1000;
@@ -201,6 +223,12 @@ function onMessage(msg) {
       playSound('pickup', null);
       break;
     }
+    case 'cash': // we walked over a money spot
+      me.money = msg.money;
+      flash('cash', 300);
+      addFeed(`+$${msg.amount}`);
+      playSound('pickup', null);
+      break;
     case 'heal': // we walked over a heal pack
       me.hp = msg.hp;
       flash('heal', 300);
@@ -228,7 +256,11 @@ function teleport(pos, yaw) {
 
 // Ammo is predicted here for an instant HUD; the host keeps its own count
 // and ignores shots while reloading or empty.
+const hack = () => hackId(me.hack);
+const speedHack = () => (hack() === 'speed' ? SPEED_HACK : hack() === 'fly' ? FLY_HACK_SPEED : 1); // movement speed multiplier
+
 function startReload(now) {
+  if (hack() === 'ammo') return; // infinite ammo: never reloads
   if (me.dead || me.reloadEnd || me.ammo[me.weapon] >= weapon().magSize) return;
   me.reloadEnd = now + weapon().reloadTime * 1000;
   session.send({ t: 'reload' }, true);
@@ -261,7 +293,7 @@ const BOLT_BUSY = 0.75; // seconds after a sniper shot the bolt is being worked
 function updateScope(dt, now) {
   const w = weapon();
   const want = aimHeld && w.zoomFov && !me.dead && !me.reloadEnd && now >= me.switchEnd
-    && now - lastShotTime > BOLT_BUSY * 1000;
+    && now - lastShotTime > BOLT_BUSY * (fireCooldown(w, me.hack) / w.cooldown) * 1000;
   me.scope = want ? Math.min(1, me.scope + dt / w.scopeTime) : Math.max(0, me.scope - dt / 0.12);
   const fov = w.zoomFov ? BASE_FOV + (w.zoomFov - BASE_FOV) * me.scope : BASE_FOV;
   renderer.setFov(fov);
@@ -271,11 +303,12 @@ function tryShoot(now) {
   const w = weapon();
   const pulled = w.auto ? mouseDown : triggerPressed; // semi-automatic: one shot per click
   triggerPressed = false;
-  if (!pulled || me.dead || !locked() || now - lastShotTime < w.cooldown * 1000 || now < me.switchEnd) return;
-  if (me.reloadEnd) return;
-  if (me.ammo[me.weapon] <= 0) return startReload(now); // pulling the trigger on empty reloads
+  if (!pulled || me.dead || !locked() || now - lastShotTime < fireCooldown(w, me.hack) * 1000 || now < me.switchEnd) return;
+  const infinite = hack() === 'ammo';
+  if (me.reloadEnd && !infinite) return;
+  if (me.ammo[me.weapon] <= 0 && !infinite) return startReload(now); // pulling the trigger on empty reloads
   lastShotTime = now;
-  me.ammo[me.weapon] -= 1;
+  if (!infinite) me.ammo[me.weapon] -= 1;
   me.protectedUntil = 0; // firing ends spawn protection
 
   // Draw the tracer immediately against what we currently see, so shooting
@@ -336,6 +369,7 @@ function renderRemotePlayers(now, dt) {
 
   for (const [id, pb] of b.players) {
     if (id === myId) continue;
+    if (pb.gone) { renderer.removeAvatar(id); continue; } // in the buy menu
     let pa = a.players.get(id) ?? pb;
     // Don't slide across the map when someone respawns.
     if (Math.hypot(pb.p[0] - pa.p[0], pb.p[2] - pa.p[2]) > 3) pa = pb;
@@ -349,6 +383,7 @@ function renderRemotePlayers(now, dt) {
       reloading: !!pb.rl,
       protected: !!pb.sp,
       weapon: pb.w ?? 0,
+      fast: hackId(pb.h) === 'ammo', // (teammates only: enemies' hacks aren't sent)
     }, dt);
   }
 }
@@ -386,7 +421,7 @@ function updateScoreboard() {
   const table = $('scoreboard');
   table.replaceChildren();
   const header = table.insertRow();
-  for (const h of ['Team', 'Player', 'Kills']) {
+  for (const h of ['Team', 'Player', 'Kills', 'Money', 'Hack']) {
     const th = document.createElement('th');
     th.textContent = h;
     header.appendChild(th);
@@ -399,6 +434,9 @@ function updateScoreboard() {
     team.style.color = TEAMS[p.team]?.color ?? '';
     row.insertCell().textContent = p.name;
     row.insertCell().textContent = p.score;
+    row.insertCell().textContent = `$${p.m ?? 0}`;
+    // Hacks: only teammates' (the host doesn't send the other team's).
+    row.insertCell().textContent = p.h === undefined ? '' : p.h ? HACKS[p.h].name.replace(/ hack$/, '') : '-';
   }
 }
 
@@ -467,14 +505,21 @@ function updateHud(now) {
   $('weaponName').textContent = isAdmin()
     ? WEAPONS.map((w, i) => (i === me.weapon ? `[${i + 1}] ${w.name}` : `${i + 1}`)).join('  ')
     : WEAPONS[me.weapon].name;
-  $('ammoCount').textContent = me.ammo[me.weapon];
+  $('ammoCount').textContent = hack() === 'ammo' ? '∞' : me.ammo[me.weapon];
   $('magSize').textContent = weapon().magSize;
-  $('ammo').classList.toggle('empty', me.ammo[me.weapon] === 0);
+  $('ammo').classList.toggle('empty', me.ammo[me.weapon] === 0 && hack() !== 'ammo');
+  $('hackName').textContent = me.hack && !me.dead ? HACKS[me.hack].name : '';
+  minimap.update(hack() === 'map' && !me.dead, me, myTeam);
+  renderer.wallHack = hack() === 'wall' && !me.dead;
+  updateVictory(now);
   $('scope').hidden = me.scope < 0.85;
   $('crosshair').hidden = $('crosshairTicks').hidden = me.scope > 0.05;
   $('reloadMsg').hidden = !me.reloadEnd || me.dead;
 
-  $('deadMsg').hidden = !me.dead;
+  $('money').textContent = `$${me.money}`;
+  $('clickToPlay').hidden = locked() || !!buy; // (the buy menu has its own Start)
+  updateBuyMenu(now);
+  $('deadMsg').hidden = !me.dead || !$('buyMenu').hidden || !$('victory').hidden;
   if (me.dead) {
     const left = deathInfo ? Math.max(0, RESPAWN_TIME - (now - deathInfo.at) / 1000) : null;
     $('deadMsg').innerHTML = '';
@@ -494,6 +539,172 @@ function updateHud(now) {
   updateCrosshair();
 }
 
+// ---- buy menu --------------------------------------------------------------
+// On joining and after every death: pick the weapon to spawn with (what you
+// can't afford is greyed out), then Start (after the respawn delay). The host
+// checks the price and charges it at the spawn.
+
+let buy = null; // { readyAt (performance.now ms), sent } while the menu is open
+let buyChoice = DEFAULT_WEAPON; // remembered between deaths
+let buyHack = 0; // index into HACKS, remembered too
+
+// Radio options: name, price (and a description for hacks).
+function buyOptions(items, group, onPick) {
+  return items.map((item, i) => {
+    const label = document.createElement('label');
+    const input = document.createElement('input');
+    input.type = 'radio';
+    input.name = group;
+    input.value = i;
+    input.addEventListener('change', () => onPick(i));
+    const name = document.createElement('span');
+    name.className = 'name';
+    name.textContent = item.name;
+    if (item.desc) {
+      const desc = document.createElement('small');
+      desc.textContent = item.desc;
+      name.append(desc);
+    }
+    const price = document.createElement('span');
+    price.className = 'price';
+    price.textContent = item.price ? `$${item.price.toLocaleString()}` : 'Free';
+    label.append(input, name, price);
+    return label;
+  });
+}
+
+function openBuyMenu(msg) {
+  const now = performance.now();
+  buy = { readyAt: now + (msg.wait ?? 0) * 1000, sent: false };
+  me.dead = true;
+  me.hack = 0; // hacks end with death
+  me.money = msg.money ?? me.money;
+  const info = $('buyInfo');
+  info.replaceChildren();
+  if (msg.earned !== undefined) {
+    const killed = document.createElement('div');
+    killed.textContent = deathInfo ? `Killed by ${deathInfo.killer}${deathInfo.headshot ? ' · headshot' : ''}` : 'You died';
+    const earned = document.createElement('div');
+    earned.className = 'earned';
+    earned.textContent = `Survived ${msg.alive} s: +$${msg.earned}`;
+    info.append(killed, earned);
+  } else {
+    info.textContent = msg.round ? 'New round! Pick a weapon and a hack.' : 'Pick a weapon and a hack to start with.';
+  }
+  $('buyList').replaceChildren(...buyOptions(WEAPONS, 'buyWeapon', (i) => { buyChoice = i; }));
+  $('buyHacks').replaceChildren(...buyOptions(HACKS, 'buyHack', (i) => { buyHack = i; }));
+  // Last time's picks if still affordable (dropping the hack first).
+  if (WEAPONS[buyChoice].price + HACKS[buyHack].price > me.money) buyHack = 0;
+  if (WEAPONS[buyChoice].price > me.money) buyChoice = DEFAULT_WEAPON;
+  $('buyMenu').hidden = false;
+  if (document.pointerLockElement) document.exitPointerLock();
+  updateBuyMenu(now);
+}
+
+function closeBuyMenu() {
+  buy = null;
+  $('buyMenu').hidden = true;
+}
+
+// Every frame while open: money, what's affordable (with the other pick),
+// the total, the Start countdown.
+function updateBuyMenu(now) {
+  if (!buy) return;
+  // The menu needs the mouse pointer: release it if anything locked it.
+  if (!buy.sent && document.pointerLockElement) document.exitPointerLock();
+  $('buyMoney').textContent = `$${me.money.toLocaleString()}`;
+  const weaponPrice = WEAPONS[buyChoice].price;
+  const hackPrice = HACKS[buyHack].price;
+  const mark = (list, items, chosen, otherPrice) => list.querySelectorAll('label').forEach((label, i) => {
+    const input = label.firstChild;
+    const locked = items[i].price + otherPrice > me.money;
+    label.classList.toggle('locked', locked);
+    input.disabled = locked || buy.sent;
+    input.checked = i === chosen;
+  });
+  mark($('buyList'), WEAPONS, buyChoice, hackPrice);
+  mark($('buyHacks'), HACKS, buyHack, weaponPrice);
+  const total = weaponPrice + hackPrice;
+  $('buyTotal').textContent = `Total $${total.toLocaleString()}`;
+  $('buyTotal').classList.toggle('over', total > me.money);
+  const start = $('buyStart');
+  const wait = (buy.readyAt - now) / 1000;
+  start.disabled = buy.sent || wait > 0 || total > me.money;
+  start.textContent = buy.sent ? 'Spawning…' : wait > 0 ? `Start in ${wait.toFixed(1)}` : 'Start';
+}
+
+$('buyStart').addEventListener('click', () => {
+  if (!buy || buy.sent || !session || WEAPONS[buyChoice].price + HACKS[buyHack].price > me.money) return;
+  buy.sent = true;
+  session.send({ t: 'spawn', w: buyChoice, h: buyHack }, true);
+  if (hackId(buyHack) !== 'victory') requestLock(); // (a click: allowed to lock the mouse)
+});
+
+// ---- victory ---------------------------------------------------------------
+// Someone bought the victory hack: their team wins; a new round follows
+// (the host sends everyone back to the buy menu with $0).
+
+let victoryUntil = 0; // performance.now() ms
+
+function showVictory(msg) {
+  closeBuyMenu();
+  me.dead = true;
+  me.hack = 0;
+  victoryUntil = performance.now() + msg.time * 1000;
+  const team = TEAMS[msg.team];
+  const el = $('victory');
+  el.replaceChildren();
+  const title = document.createElement('div');
+  title.className = 'title';
+  title.textContent = `${team.name} wins!`;
+  title.style.color = team.color;
+  const by = document.createElement('div');
+  by.textContent = `${msg.by} bought the Victory hack`;
+  const next = document.createElement('div');
+  next.className = 'next';
+  el.append(title, by, next);
+  el.hidden = false;
+  if (document.pointerLockElement) document.exitPointerLock();
+}
+
+function updateVictory(now) {
+  const el = $('victory');
+  if (el.hidden) return;
+  const left = (victoryUntil - now) / 1000;
+  if (left <= -1 || buy) { el.hidden = true; return; } // (the new round's buy menu is up)
+  el.querySelector('.next').textContent = `Next round in ${Math.max(0, Math.ceil(left))}`;
+}
+
+// ---- aim hack ---------------------------------------------------------------
+// While Shift is held: snap the view onto the head of the visible enemy
+// closest to where we're aiming (in sight and on screen).
+
+const _head = [0, 0, 0];
+function aimLock() {
+  const eye = [me.pos[0], me.pos[1] + EYE_HEIGHT, me.pos[2]];
+  const view = lookDir(me.yaw, me.pitch);
+  const halfFov = (renderer.camera.fov / 2) * (Math.PI / 180);
+  const limit = Math.atan(Math.tan(halfFov) * Math.hypot(1, renderer.camera.aspect)); // to the screen's corners
+  let best = null;
+  let bestAngle = limit;
+  for (const [id, avatar] of renderer.avatars) {
+    if (avatar.dead || id === myId || avatar.team === myTeam) continue;
+    const head = headAABB(avatar.object.position.toArray());
+    for (let i = 0; i < 3; i++) _head[i] = (head.min[i] + head.max[i]) / 2;
+    const d = _head.map((v, i) => v - eye[i]);
+    const dist = Math.hypot(...d);
+    const dir = d.map((v) => v / dist);
+    const angle = Math.acos(Math.max(-1, Math.min(1, dir[0] * view[0] + dir[1] * view[1] + dir[2] * view[2])));
+    if (angle >= bestAngle) continue;
+    if (world.raycast(eye, dir, dist) < dist - 0.05) continue; // behind a wall
+    bestAngle = angle;
+    best = d;
+  }
+  if (!best) return;
+  me.yaw = Math.atan2(-best[0], -best[2]);
+  me.pitch = Math.atan2(best[1], Math.hypot(best[0], best[2]));
+}
+
 // ---- main loop -------------------------------------------------------------
 
 let lastFrame = performance.now();
@@ -507,6 +718,7 @@ function frame(now) {
     if (!me.dead) world.stepPlayer(me, readMoveInput(), dt);
     updateReload(now);
     updateScope(dt, now);
+    if (hack() === 'aim' && (keys.has('ShiftLeft') || keys.has('ShiftRight')) && locked() && !me.dead) aimLock();
     tryShoot(now);
 
     if (!me.dead && now - lastStateSent >= 1000 / STATE_SEND_RATE) {
@@ -515,8 +727,10 @@ function frame(now) {
     }
 
     // Spread eases toward what the current movement allows.
-    const speed = Math.hypot(me.vel[0], me.vel[2]);
-    me.spread += (spreadFor(weapon(), speed, me.onGround, me.scope > 0.95) - me.spread) * (1 - Math.exp(-12 * dt));
+    // (Flying counts as standing on the ground; the recoil hack cuts it 85%.)
+    const speed = Math.hypot(me.vel[0], me.vel[2]) / speedHack();
+    const target = spreadFor(weapon(), speed, me.onGround || hack() === 'fly', me.scope > 0.95) * (hack() === 'recoil' ? RECOIL_HACK : 1);
+    me.spread += (target - me.spread) * (1 - Math.exp(-12 * dt));
 
     renderRemotePlayers(now, dt);
     updateHud(now);
@@ -537,6 +751,7 @@ function frame(now) {
       reloading: !!me.reloadEnd,
       ground: me.onGround ? me.pos[1] : groundBelow(me.pos),
       weapon: me.weapon,
+      fast: hack() === 'ammo',
       hidden: me.scope > 0.85, // looking through the scope
       eye,
     });
@@ -592,7 +807,8 @@ function enterGame(code, isHost) {
   setStatus('');
   roomLabel = isHost ? `Hosting · Room code: ${code} · share it with friends` : `Room ${code}`;
   showRoomInfo(); // (the host's own welcome has already arrived)
-  requestLock();
+  // No pointer lock yet: the game starts in the buy menu, which needs the
+  // mouse pointer; its Start button locks it.
 }
 
 function leaveGame(reason) {
@@ -620,6 +836,12 @@ function leaveGame(reason) {
   renderer.clearAvatars();
   renderer.clearViewmodel();
   renderer.updatePickups(null);
+  closeBuyMenu();
+  me.money = 0;
+  me.hack = 0;
+  renderer.wallHack = false;
+  $('victory').hidden = true;
+  $('minimap').hidden = true;
   if (document.pointerLockElement) document.exitPointerLock();
   $('hud').hidden = true;
   $('menu').hidden = false;

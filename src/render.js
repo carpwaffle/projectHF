@@ -4,7 +4,7 @@
 import * as THREE from 'three';
 import { Character, makeRifle, makeGun, MUZZLE } from './character.js';
 import { Tracers } from './effects.js';
-import { WEAPONS, PICKUP_SPOTS, PICKUP_RADIUS, HEAL_SPOTS } from './shared.js';
+import { WEAPONS, ALL_SPOTS, PICKUP_RADIUS, TEAMS, headAABB, bodyAABB } from './shared.js';
 
 // Where the camera sits relative to the head bone (metres, view-aligned:
 // side, up, forward), per holding style, blended when switching. A little
@@ -14,6 +14,16 @@ const VIEW_EYE = {
   rifle: [-0.14, -0.04, 0.18],
   pistol: [-0.13, 0.05, 0.12],
 };
+// Horizon: the haze colour (fog and the bottom of the sky), the sky
+// overhead, the fog distances, the ground beyond the map, the skyline.
+const HORIZON = 0xc9dcec;
+const ZENITH = 0x6f9fd8;
+const FOG_NEAR = 70;
+const FOG_FAR = 185; // (camera far plane: 200)
+const OUTER_GROUND = 0x45484d;
+const SKYLINE = 0x7d8796; // the nearest towers' colour (bluish grey)
+const _up = new THREE.Vector3(0, 1, 0);
+
 const _eyePoint = new THREE.Vector3();
 const _offset = new THREE.Vector3();
 const _shift = new THREE.Vector3();
@@ -27,8 +37,8 @@ export class Renderer {
     this.renderer.toneMapping = THREE.NeutralToneMapping;
     this.renderer.toneMappingExposure = 1.15;
     this.scene = new THREE.Scene();
-    this.scene.background = new THREE.Color(0xb7d6f2);
-    this.scene.fog = new THREE.Fog(0xb7d6f2, 80, 190);
+    this.scene.background = new THREE.Color(HORIZON);
+    this.scene.fog = new THREE.Fog(HORIZON, FOG_NEAR, FOG_FAR);
 
     this.camera = new THREE.PerspectiveCamera(75, 1, 0.05, 200);
     this.camera.rotation.order = 'YXZ';
@@ -61,6 +71,21 @@ export class Renderer {
     this.onSound = null; // (name, position | null, intensity, variant) => void, set by main.js
     this.tracers = new Tracers(this.scene);
     this.buildPickupSpots();
+    this.buildHorizon();
+
+    // Wall hack: every other player drawn again on top of the world as a
+    // see-through silhouette in their team's colour (layers 1 = teammates,
+    // 2 = enemies, drawn with an override material), plus their hitboxes.
+    this.wallHack = false;
+    const xray = (color, opacity) => new THREE.MeshBasicMaterial({
+      color, transparent: true, opacity, depthTest: false, depthWrite: false, fog: false, toneMapped: false,
+    });
+    this.xrayMaterials = [xray(TEAMS[0].color, 0.38), xray(TEAMS[1].color, 0.38)]; // by team
+    this.xrayScene = new THREE.Scene(); // the hitboxes
+    this.hitboxGeometry = new THREE.EdgesGeometry(new THREE.BoxGeometry(1, 1, 1));
+    this.hitboxMaterials = TEAMS.map((t) => new THREE.LineBasicMaterial({
+      color: t.color, depthTest: false, depthWrite: false, fog: false, toneMapped: false,
+    }));
 
     const resize = () => {
       this.renderer.setSize(window.innerWidth, window.innerHeight, false);
@@ -147,6 +172,7 @@ export class Renderer {
   removeAvatar(id) {
     const avatar = this.avatars.get(id);
     if (!avatar) return;
+    for (const box of avatar.hitboxes ?? []) this.xrayScene.remove(box);
     this.scene.remove(avatar.object);
     avatar.dispose();
     this.avatars.delete(id);
@@ -200,21 +226,156 @@ export class Renderer {
     view.object.updateMatrixWorld(true);
   }
 
+  // ---- horizon -----------------------------------------------------------
+  // Beyond the ring of facades: the ground carries on, a skyline of plain
+  // towers stands behind them, and both fade into a haze that matches the
+  // bottom of a gradient sky, so the map has no visible edge.
+
+  buildHorizon() {
+    // Sky: a dome around the camera, drawn first, behind everything (hazy
+    // HORIZON at and below the horizon, ZENITH overhead). Tone-mapped like
+    // the fogged scene so the two meet without a seam.
+    const sky = new THREE.Mesh(
+      new THREE.SphereGeometry(150, 32, 16),
+      new THREE.ShaderMaterial({
+        uniforms: { horizon: { value: new THREE.Color(HORIZON) }, zenith: { value: new THREE.Color(ZENITH) } },
+        vertexShader: `
+          varying vec3 vDir;
+          void main() {
+            vDir = normalize(position);
+            gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+          }`,
+        fragmentShader: `
+          uniform vec3 horizon;
+          uniform vec3 zenith;
+          varying vec3 vDir;
+          void main() {
+            float t = smoothstep(0.0, 0.55, vDir.y);
+            gl_FragColor = vec4(mix(horizon, zenith, pow(t, 0.8)), 1.0);
+            #include <tonemapping_fragment>
+            #include <colorspace_fragment>
+          }`,
+        side: THREE.BackSide,
+        depthTest: false,
+        depthWrite: false,
+        fog: false,
+      }),
+    );
+    sky.renderOrder = -1000;
+    sky.frustumCulled = false;
+    sky.onBeforeRender = (renderer, scene, camera) => { // always around us
+      sky.position.copy(camera.position);
+      sky.updateMatrixWorld();
+    };
+    this.scene.add(sky);
+
+    // Ground: asphalt from under the facades out past where the fog is total.
+    const ground = new THREE.Mesh(
+      new THREE.RingGeometry(52, 320, 96, 1).rotateX(-Math.PI / 2),
+      new THREE.MeshBasicMaterial({ color: OUTER_GROUND }),
+    );
+    ground.position.y = -0.03; // (just under the map's own ground)
+    this.scene.add(ground);
+
+    // Skyline: three rings of plain towers, taller further out, point-
+    // symmetric like the map. Seeded, so it's the same for everyone.
+    let seed = 7;
+    const rand = () => ((seed = (seed * 16807) % 2147483647) - 1) / 2147483646;
+    const towers = [];
+    for (const [radius, count, minH, maxH] of [[80, 36, 9, 20], [115, 32, 14, 32], [155, 26, 20, 46]]) {
+      for (let k = 0; k < count / 2; k++) {
+        const a = ((k + 0.25 + rand() * 0.5) / count) * Math.PI * 2;
+        const r = radius + (rand() - 0.5) * 12;
+        const w = 9 + rand() * 12;
+        const d = 9 + rand() * 12;
+        const h = minH + rand() * (maxH - minH);
+        const shade = rand();
+        for (const sign of [1, -1]) towers.push({ x: Math.cos(a) * r * sign, z: Math.sin(a) * r * sign, w, d, h, a, r, shade });
+      }
+    }
+    // Unlit, flat silhouettes, already partly hazed (closer to the horizon
+    // colour the further out), then fogged like everything else.
+    const skyline = new THREE.InstancedMesh(
+      new THREE.BoxGeometry(1, 1, 1).translate(0, 0.5, 0),
+      new THREE.MeshBasicMaterial({ color: 0xffffff }),
+      towers.length,
+    );
+    const m = new THREE.Matrix4();
+    const q = new THREE.Quaternion();
+    const near = new THREE.Color(SKYLINE);
+    const haze = new THREE.Color(HORIZON);
+    towers.forEach((t, i) => {
+      q.setFromAxisAngle(_up, -t.a);
+      m.compose(new THREE.Vector3(t.x, 0, t.z), q, new THREE.Vector3(t.w, t.h, t.d));
+      skyline.setMatrixAt(i, m);
+      const k = 0.25 + 0.45 * ((t.r - 70) / 100) + (t.shade - 0.5) * 0.12;
+      skyline.setColorAt(i, near.clone().lerp(haze, Math.min(0.9, Math.max(0, k))));
+    });
+    this.scene.add(skyline);
+  }
+
+  // ---- wall hack ---------------------------------------------------------
+
+  renderWallHack() {
+    const layerOf = (avatar) => (avatar.dead ? 0 : 1 + avatar.team);
+    for (const avatar of this.avatars.values()) {
+      if (!avatar.xrayMeshes) {
+        avatar.xrayMeshes = [];
+        avatar.model.traverse((o) => { if (o.isSkinnedMesh) avatar.xrayMeshes.push(o); });
+        avatar.hitboxes = [0, 1].map(() => {
+          const box = new THREE.LineSegments(this.hitboxGeometry, this.hitboxMaterials[avatar.team] ?? this.hitboxMaterials[0]);
+          box.frustumCulled = false;
+          this.xrayScene.add(box);
+          return box;
+        });
+      }
+      const layer = layerOf(avatar);
+      for (const m of avatar.xrayMeshes) {
+        m.layers.disable(1);
+        m.layers.disable(2);
+        if (layer) m.layers.enable(layer);
+      }
+      // Head and body boxes, as the host hit-tests them.
+      const pos = avatar.object.position.toArray();
+      [headAABB(pos), bodyAABB(pos)].forEach((b, i) => {
+        const box = avatar.hitboxes[i];
+        box.visible = layer > 0;
+        box.position.set(...b.min.map((v, k) => (v + b.max[k]) / 2));
+        box.scale.set(...b.max.map((v, k) => v - b.min[k]));
+      });
+    }
+    // Draw over what's already there (no clearing: hide the scene's
+    // background colour and fog for these passes).
+    const { background, fog } = this.scene;
+    this.scene.background = null;
+    this.scene.fog = null;
+    this.renderer.autoClear = false;
+    for (const team of [0, 1]) {
+      this.camera.layers.set(1 + team);
+      this.scene.overrideMaterial = this.xrayMaterials[team];
+      this.renderer.render(this.scene, this.camera);
+    }
+    this.scene.overrideMaterial = null;
+    this.camera.layers.set(0);
+    this.renderer.render(this.xrayScene, this.camera);
+    this.renderer.autoClear = true;
+    this.scene.background = background;
+    this.scene.fog = fog;
+  }
+
   // ---- weapon pickups ----------------------------------------------------
 
   // A thick circle on the floor at each spot (white: weapon, green: heal
-  // pack), and a slot above it for what's on offer (spinning and bobbing).
-  // Same order as the host's pickups: weapon spots, then heal spots.
+  // pack, yellow: money), and a slot above it for what's on offer (spinning
+  // and bobbing). Same order as the host's pickups (ALL_SPOTS).
   buildPickupSpots() {
     const ring = new THREE.RingGeometry(PICKUP_RADIUS - 0.16, PICKUP_RADIUS, 48).rotateX(-Math.PI / 2);
     const ringMaterial = (color) => new THREE.MeshBasicMaterial({
       color, toneMapped: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2,
     });
-    const white = ringMaterial(0xffffff);
-    const green = ringMaterial(0x3cff6e);
-    const spots = [...PICKUP_SPOTS.map((p) => [p, false]), ...HEAL_SPOTS.map((p) => [p, true])];
-    this.pickups = spots.map(([[x, y, z], heal], i) => {
-      const circle = new THREE.Mesh(ring, heal ? green : white);
+    const rings = { weapon: ringMaterial(0xffffff), heal: ringMaterial(0x3cff6e), money: ringMaterial(0xffd23c) };
+    this.pickups = ALL_SPOTS.map(({ pos: [x, y, z], kind }, i) => {
+      const circle = new THREE.Mesh(ring, rings[kind]);
       circle.position.set(x, y + 0.02, z);
       this.scene.add(circle);
       const holder = new THREE.Group();
@@ -232,7 +393,7 @@ export class Renderer {
       timer.position.set(x, y + 1.0, z);
       timer.visible = false;
       this.scene.add(timer);
-      return { holder, heal, weapon: -1, gun: null, timer, canvas, texture, readyAt: 0, shown: -1 };
+      return { holder, kind, weapon: -1, gun: null, timer, canvas, texture, readyAt: 0, shown: -1 };
     });
   }
 
@@ -253,6 +414,34 @@ export class Renderer {
       this.healPackMaterial = new THREE.MeshLambertMaterial({ map });
     }
     return new THREE.Mesh(this.healPackGeometry, this.healPackMaterial);
+  }
+
+  // A gold coin with a "$" on both faces, standing on its edge.
+  makeCoin() {
+    if (!this.coinGeometry) {
+      const canvas = document.createElement('canvas');
+      canvas.width = canvas.height = 128;
+      const g = canvas.getContext('2d');
+      g.fillStyle = '#f2c230';
+      g.fillRect(0, 0, 128, 128);
+      g.strokeStyle = '#b8860b';
+      g.lineWidth = 10;
+      g.beginPath();
+      g.arc(64, 64, 54, 0, Math.PI * 2);
+      g.stroke();
+      g.fillStyle = '#9a6b00';
+      g.font = 'bold 84px system-ui, sans-serif';
+      g.textAlign = 'center';
+      g.textBaseline = 'middle';
+      g.fillText('$', 64, 70);
+      const face = new THREE.CanvasTexture(canvas);
+      face.colorSpace = THREE.SRGBColorSpace;
+      this.coinGeometry = new THREE.CylinderGeometry(0.32, 0.32, 0.07, 32).rotateX(Math.PI / 2); // faces along ±Z
+      const edge = new THREE.MeshLambertMaterial({ color: 0xd4a017, emissive: 0x3a2a00 });
+      const faceMaterial = new THREE.MeshLambertMaterial({ map: face, emissive: 0x2a1e00 });
+      this.coinMaterials = [edge, faceMaterial, faceMaterial]; // side, top, bottom
+    }
+    return new THREE.Mesh(this.coinGeometry, this.coinMaterials);
   }
 
   drawTimer(spot, seconds) {
@@ -285,8 +474,8 @@ export class Renderer {
       if (spot.gun) spot.holder.remove(spot.gun);
       spot.gun = null;
       if (w < 0) return;
-      if (spot.heal) {
-        spot.gun = this.makeHealPack();
+      if (spot.kind !== 'weapon') {
+        spot.gun = spot.kind === 'heal' ? this.makeHealPack() : this.makeCoin();
         spot.holder.add(spot.gun);
         return;
       }
@@ -403,6 +592,7 @@ export class Renderer {
     const firstPerson = this.view?.object.visible;
     if (firstPerson) this.gun.visible = false;
     this.renderer.render(this.scene, this.camera);
+    if (this.wallHack) this.renderWallHack();
     if (firstPerson) {
       this.renderer.autoClear = false;
       this.renderer.clearDepth();

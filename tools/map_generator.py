@@ -963,38 +963,54 @@ def build_props(cols, buildings):
         placed += 1
 
 
+def plain_material(name, rgb):
+    """A flat-coloured material (no texture), e.g. for the boundary blocks."""
+    mat = bpy.data.materials.get(name) or bpy.data.materials.new(name)
+    mat.use_nodes = True
+    bsdf = mat.node_tree.nodes.get('Principled BSDF')
+    bsdf.inputs['Base Color'].default_value = (*rgb, 1.0)
+    bsdf.inputs['Roughness'].default_value = 0.9
+    return mat
+
+
 def build_ring(cols):
-    """Inward-facing facades around the arena. Segment k and k + 13 face
+    """The arena's boundary: plain blocky buildings (like the skyline beyond
+    the map, see src/render.js) all round, entirely outside the ring line
+    (where the old facades stood; local +y points away from the centre), so
+    nothing reaches into the arena. Each 12 m segment is 2-3 blocks of
+    different heights and depths, with a taller block outside each joint. Segment k and k + 13 face
     each other across the centre and are built the same, like the rest of
     the map."""
     root = new_empty(cols, 'Ring', 0, 0, 0)
     col = MeshBuilder()
-    styles = list(STYLES.values())
+    vis = MeshBuilder()
     half = RING_SEGMENTS // 2
     for k in range(RING_SEGMENTS):
         rand = random.Random(f'{SEED}-ring-{k % half}')
         a = 2 * math.pi * k / RING_SEGMENTS
-        nx, ny = -math.cos(a), -math.sin(a)  # facades face the centre
-        tx, ty = -math.sin(a), math.cos(a)
+        nx, ny = -math.cos(a), -math.sin(a)  # (rot_for_normal: local +y points away from the centre)
         cx, cy = RING_R * math.cos(a), RING_R * math.sin(a)
-        st = rand.choice(styles)
-        floors = rand.choice([2, 2, 3])
-        rot = rot_for_normal(nx, ny)
-        for f in range(floors):
-            for p in range(6):
-                off = -5 + 2 * p
-                name = st['wall'] if rand.random() > 0.55 else (st['ground_window'] if f == 0 else st['window'])
-                local = Matrix.Translation((cx + tx * off, cy + ty * off, f * FLOOR_H)) @ rot
-                place(cols, kit_mesh(name), root, local)
-        for p in range(6):
-            off = -5 + 2 * p
-            place(cols, kit_mesh(st['parapet']), root, Matrix.Translation((cx + tx * off, cy + ty * off, floors * FLOOR_H)) @ rot)
-        # Joint column between segments.
+        m = Matrix.Translation((cx, cy, 0)) @ rot_for_normal(nx, ny)
+        n = rand.choice([2, 2, 3])
+        cuts = sorted(rand.uniform(-4.5, 4.5) for _ in range(n - 1))
+        edges = [-6.4] + cuts + [6.4]
+        for x0, x1 in zip(edges, edges[1:]):
+            h = rand.uniform(7.0, 15.0)
+            d = rand.uniform(5.0, 11.0)
+            vis.box((x0, 0, 0), (x1, d, h), m, rand.randrange(3))
+        # Joint block between segments, just outside the corner.
         ja = a + math.pi / RING_SEGMENTS
-        jr = RING_R / math.cos(math.pi / RING_SEGMENTS)
-        for f in range(3):
-            place(cols, kit_mesh('Metal_Column_Center'), root, Matrix.Translation((jr * math.cos(ja), jr * math.sin(ja), f * FLOOR_H)))
-        col.box((-6.3, 0, -1), (6.3, 1.5, 30), Matrix.Translation((cx, cy, 0)) @ rot)
+        jr = RING_R / math.cos(math.pi / RING_SEGMENTS) + 1.7
+        jm = Matrix.Translation((jr * math.cos(ja), jr * math.sin(ja), 0)) @ Matrix.Rotation(ja, 4, 'Z')
+        vis.box((-1.6, -1.6, 0), (1.6, 1.6, rand.uniform(10.0, 18.0)), jm, rand.randrange(3))
+        col.box((-6.3, 0, -1), (6.3, 1.5, 30), m)
+    vis.finish(cols, 'Visual', 'Ring_Blocks', root, uv_scale=0.25, materials=[
+        # (Dark-ish: in game these are multiplied by the bright baked light.)
+        # Close to the skyline's bluish grey (render.js SKYLINE), so they blend.
+        plain_material('MI_Block_Grey', (0.165, 0.185, 0.215)),
+        plain_material('MI_Block_Warm', (0.18, 0.175, 0.17)),
+        plain_material('MI_Block_Dark', (0.13, 0.145, 0.175)),
+    ])
     col.finish(cols, 'Collision', 'COL_Ring', root, wire=True)
 
 

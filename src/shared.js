@@ -19,7 +19,7 @@ export const TEAMS = [
   { name: 'Red', color: '#ff5a4c' },
 ];
 
-export const MAX_HP = 100;
+export const MAX_HP = 200;
 export const SPAWN_PROTECTION = 3; // seconds of invulnerability after spawning (ends early when you fire)
 
 // Weapons (index = the number sent over the network, and key 1-6). Every
@@ -27,6 +27,7 @@ export const SPAWN_PROTECTION = 3; // seconds of invulnerability after spawning 
 // or the mouse wheel. Everyone spawns with DEFAULT_WEAPON.
 //   cooldown: seconds between shots (incl. working a bolt / pump)
 //   auto: keeps firing while the trigger is held (otherwise one shot per click)
+//   price: what it costs to spawn with it (dollars)
 //   spread: half-angle (radians) of the cone shots land in, standing still /
 //     at full running speed / in the air; `scoped` replaces it while scoped
 //   zoomFov: vertical field of view when scoped (degrees)
@@ -36,32 +37,38 @@ export const SPAWN_PROTECTION = 3; // seconds of invulnerability after spawning 
 export const WEAPONS = [
   {
     id: 'pistol', name: 'Pistol', damage: 30, headDamage: 75, cooldown: 0.15, auto: false,
+    price: 0,
     magSize: 12, reloadTime: 1.6,
     spread: { still: 0.01, move: 0.03, air: 0.07 }, // (same as the rifle)
   },
   {
     id: 'revolver', name: 'Revolver', damage: 55, headDamage: 110, cooldown: 0.35, auto: false,
+    price: 250,
     magSize: 6, reloadTime: 2.4,
     spread: { still: 0.002, move: 0.02, air: 0.045 }, // second only to the sniper
   },
   {
     id: 'rifle', name: 'Rifle', damage: 25, headDamage: 50, cooldown: 0.15, auto: true,
+    price: 500,
     magSize: 30, reloadTime: 2.2,
     spread: { still: 0.01, move: 0.03, air: 0.07 },
   },
   {
     id: 'p90', name: 'P90', damage: 17, headDamage: 34, cooldown: 0.075, auto: true,
+    price: 400,
     magSize: 50, reloadTime: 2.5,
     spread: { still: 0.014, move: 0.04, air: 0.08 },
   },
   {
     id: 'shotgun', name: 'Shotgun', damage: 13, headDamage: 20, cooldown: 0.65, auto: false,
+    price: 400,
     magSize: 6, reloadTime: 2.6,
     pellets: 8, pelletSpread: 0.07, falloff: [8, 30, 0.3],
     spread: { still: 0, move: 0.02, air: 0.05 },
   },
   {
     id: 'sniper', name: 'Sniper', damage: 80, headDamage: 200, cooldown: 1.0, auto: false,
+    price: 650,
     magSize: 5, reloadTime: 3.0,
     spread: { still: 0.001, move: 0.015, air: 0.04 }, // the most accurate, even unscoped
     scoped: { still: 0, move: 0.008, air: 0.04 },
@@ -71,9 +78,50 @@ export const WEAPONS = [
 export const DEFAULT_WEAPON = WEAPONS.findIndex((w) => w.id === 'pistol'); // what everyone spawns with
 export const weaponIndex = (id) => WEAPONS.findIndex((w) => w.id === id);
 
+// Money: earned on every death (SURVIVAL_RATE per second alive) and kill
+// (KILL_REWARD); spent on the weapon you spawn with (WEAPONS[].price). Everyone
+// starts with $0. The host keeps the accounts.
+export const SURVIVAL_RATE = 4; // dollars per second alive
+export const KILL_REWARD = 250;
+
+// Hacks: bought in the buy menu like weapons (separately: you pay for both),
+// one at a time, active until your next death. Index = the number sent over
+// the network.
+export const HACKS = [
+  { id: 'none', name: 'No hack', price: 0, desc: '' },
+  { id: 'map', name: 'Map hack', price: 300, desc: 'Minimap: every player and pickup timer' },
+  { id: 'speed', name: 'Speed hack', price: 400, desc: 'Move 3x faster' },
+  { id: 'recoil', name: 'Recoil hack', price: 400, desc: '85% less spread' },
+  { id: 'ammo', name: 'Infinite ammo hack', price: 500, desc: 'No reloads; faster shotgun and sniper' },
+  { id: 'wall', name: 'Wall hack', price: 600, desc: 'See players and hitboxes through walls' },
+  { id: 'fly', name: 'Fly hack', price: 700, desc: 'Q up, E down (up to 25 m); a bit faster' },
+  { id: 'noclip', name: 'No-clip hack', price: 800, desc: 'Walk through walls and ceilings' },
+  { id: 'hp', name: 'HP hack', price: 800, desc: '1500 HP' },
+  { id: 'aim', name: 'Aim hack', price: 900, desc: 'Hold Shift: lock onto a visible head' },
+  { id: 'victory', name: 'Victory hack', price: 10000, desc: 'Your team wins the round' },
+];
+export const hackIndex = (id) => HACKS.findIndex((h) => h.id === id);
+export const hackId = (index) => HACKS[index]?.id ?? 'none';
+export const SPEED_HACK = 3.0; // movement speed multiplier
+export const FLY_HACK_SPEED = 1.3; // ... while flying with the fly hack
+export const RECOIL_HACK = 0.15; // spread multiplier (85% less)
+export const FLY_SPEED = 6; // m/s up / down with the fly hack
+export const FLY_MAX_Y = 25; // fly ceiling (House08's roof is at 15 m)
+export const HACK_HP = 1500; // max HP with the HP hack
+export const HEAL_AMOUNT = 100; // a heal pack heals this much (up to max HP)
+export const FAST_CYCLE = 0.5; // infinite ammo: shotgun pump / sniper bolt time multiplier
+export const VICTORY_SCREEN = 10; // seconds the winning team is shown before the next round
+
+// Seconds between shots for a weapon, with the player's hack.
+export function fireCooldown(weapon, hack) {
+  const fast = hackId(hack) === 'ammo' && (weapon.id === 'shotgun' || weapon.id === 'sniper');
+  return weapon.cooldown * (fast ? FAST_CYCLE : 1);
+}
+
 // Only the player with this name can switch weapons (number keys, Q, wheel).
 // Everyone else uses the spawn weapon until they pick another one up.
 export const ADMIN_NAME = 'Admin';
+export const ADMIN_MONEY = 999999; // (testing) what Admin starts every round with
 
 // Weapon pickups: spots (game coordinates: x, floor height, z) marked with a
 // white circle. Walking over one holding a different weapon takes it (full
@@ -85,18 +133,32 @@ export const PICKUP_SPOTS = [
   [45, 0, 0], // east end of the road
   [-45, 0, 0], // west end of the road
   [4.5, 12.15, 3.5], [-4.5, 12.15, -3.5], [3.5, 12.15, -4.5], [-3.5, 12.15, 4.5], // House08, 5th floor
-  [38, 3.16, -16], [-38, 3.16, 16], // House03 / House11 roofs
   [0, 3.15, -28], [0, 3.15, 28], // middle of the House01 / House09 bridges
 ];
 // Heal packs, marked with a green circle: walking over one while hurt heals
 // to full; the spot then refills after HEAL_RESPAWN seconds.
 export const HEAL_SPOTS = [
   [-34.59, 9.15, -20.59], [34.59, 9.15, 20.59], // House05 / House13, 4th floor
-  [-17, 6.16, -17], [17, 6.16, 17], // House07 / House15 roofs
   [17, 0.15, -37], [-17, 0.15, 37], // House01's north annex / House09's south annex (ground floor)
   [4.5, 15.15, 0], [-4.5, 15.15, 0], // House08 roof
 ];
 export const HEAL_RESPAWN = 20; // seconds
+// Money spots, marked with a yellow circle: walking over one gives
+// MONEY_AMOUNT; the spot then refills after MONEY_RESPAWN seconds.
+export const MONEY_SPOTS = [
+  [38, 3.16, -16], [-38, 3.16, 16], // House03 / House11 roofs
+  [-17, 6.16, -17], [17, 6.16, 17], // House07 / House15 roofs (behind the billboards)
+];
+export const MONEY_AMOUNT = 1000;
+export const MONEY_RESPAWN = 20; // seconds
+
+// All pickup spots in one list, in the order the host and clients share
+// (weapon spots, heal spots, money spots): [{ pos, kind }].
+export const ALL_SPOTS = [
+  ...PICKUP_SPOTS.map((pos) => ({ pos, kind: 'weapon' })),
+  ...HEAL_SPOTS.map((pos) => ({ pos, kind: 'heal' })),
+  ...MONEY_SPOTS.map((pos) => ({ pos, kind: 'money' })),
+];
 export const PICKUP_RADIUS = 1.0; // the circle's (outer) radius
 export const PICKUP_RESPAWN = 20; // seconds
 export const PICKUP_WEAPONS = WEAPONS.map((_, i) => i).filter((i) => i !== DEFAULT_WEAPON);
