@@ -7,10 +7,11 @@ import {
   SNAPSHOT_RATE, MAX_HP, RESPAWN_TIME, EYE_HEIGHT, MAX_RANGE, TEAMS,
   WEAPONS, DEFAULT_WEAPON, SWITCH_TIME, SPAWN_PROTECTION, shotDamage, ADMIN_NAME, ADMIN_MONEY,
   PICKUP_RADIUS, PICKUP_RESPAWN, randomPickupWeapon, HEAL_RESPAWN, ALL_SPOTS, MONEY_AMOUNT, MONEY_RESPAWN,
-  SURVIVAL_RATE, KILL_REWARD, HACKS, hackId, HACK_HP, HEAL_AMOUNT, VICTORY_SCREEN, fireCooldown,
-  pickSpawn, lookDir, headAABB, bodyAABB, rayAABB, normalize,
+  SURVIVAL_RATE, KILL_REWARD, PLAYER_TIMEOUT, ALL_HACKS, hasHack, hacksPrice, HACK_HP, HEAL_AMOUNT, VICTORY_SCREEN, fireCooldown,
+  pickSpawn, lookDir, rayPlayer, normalize,
 } from './shared.js';
 import { SKINS } from './assets.js';
+import { BotManager } from './bots.js';
 
 export const HOST_ID = 'host';
 
@@ -21,6 +22,8 @@ const round = (n) => Math.round(n * 100) / 100;
 // early here keeps the first shots after a reload from being rejected.
 const RELOAD_GRACE = 0.2;
 
+const HISTORY = 12; // snapshots kept for lag compensation (0.6 s at 20 per second): the furthest back a shot is checked
+
 export class HostServer {
   // world: the map's World (collision, spawns), shared with the local client.
   constructor(peer, deliverLocal, world) {
@@ -28,6 +31,9 @@ export class HostServer {
     this.peer = peer;
     this.deliverLocal = deliverLocal; // (msg) => void, feeds the host's own client
     this.players = new Map();
+    // Lag compensation: what the last snapshots showed (see seenBy).
+    this.snapSeq = 0;
+    this.history = []; // [{ n, players: Map<id, { pos, yaw, pitch, weapon }> }], oldest first
     this.conns = new Map(); // clientId -> { rel, state }
     this.lastSnapshot = 0;
     this.roundOverAt = 0; // host time (s) the victory screen ends (0 = round in progress)
@@ -35,6 +41,8 @@ export class HostServer {
     // on offer (index into WEAPONS) / 1 for a heal pack or money, -1 =
     // empty; readyAt: when an empty one refills.
     this.pickups = ALL_SPOTS.map(({ pos, kind }) => ({ pos, kind, item: this.refill(kind), readyAt: 0 }));
+    this.bots = new BotManager(this); // AI players (bots.js)
+    this.lastTick = performance.now() / 1000;
 
     peer.on('connection', (conn) => this.onConnection(conn));
   }
@@ -54,6 +62,7 @@ export class HostServer {
 
   sendTo(id, msg, reliable = true) {
     if (id === HOST_ID) return this.deliverLocal(msg);
+    if (this.bots.isBot(id)) return this.bots.deliver(id, msg);
     const entry = this.conns.get(id);
     const conn = reliable ? entry?.rel : entry?.state;
     if (conn?.open) conn.send(msg);
@@ -65,13 +74,13 @@ export class HostServer {
 
   // ---- players -----------------------------------------------------------
 
-  addPlayer(id, name) {
+  // team: (bots) the team to join; people get the smaller one.
+  addPlayer(id, name, team = this.pickTeam()) {
     if (this.players.has(id)) return;
-    const team = this.pickTeam();
     const spawn = this.spawnPoint(team, id);
     const player = {
       id,
-      name: String(name || 'Player').slice(0, 16),
+      name: this.bots.isBot(id) ? name : String(name || 'Player').slice(0, 16),
       skin: this.pickSkin(),
       team,
       pos: spawn.pos,
@@ -86,7 +95,7 @@ export class HostServer {
       joining: true,
       spawnWeapon: -1,
       spawnHack: 0,
-      hack: 0, // index into HACKS, until the next death
+      hack: 0, // hacks (bit mask, see HACKS), until the next death
       maxHp: MAX_HP,
       spawnedAt: 0,
       respawnAt: 0,
@@ -96,6 +105,7 @@ export class HostServer {
       switchEnd: 0, // host time (s) the weapon switch finishes (can't fire before)
       reloadEnd: 0, // host time (s) the current reload finishes, 0 = not reloading
       protectedUntil: 0,
+      lastSeen: performance.now() / 1000,
     };
     player.money = this.startMoney(player);
     this.players.set(id, player);
@@ -109,10 +119,16 @@ export class HostServer {
     return player.name === ADMIN_NAME ? ADMIN_MONEY : 0;
   }
 
-  // The team with fewer players (random on a tie).
+  // The team with fewer people (bots make way: see BotManager.balance), then
+  // fewer players, then random.
   pickTeam() {
+    const people = [0, 0];
     const counts = [0, 0];
-    for (const p of this.players.values()) counts[p.team] += 1;
+    for (const p of this.players.values()) {
+      counts[p.team] += 1;
+      if (!this.bots.isBot(p.id)) people[p.team] += 1;
+    }
+    if (people[0] !== people[1]) return people[0] < people[1] ? 0 : 1;
     if (counts[0] !== counts[1]) return counts[0] < counts[1] ? 0 : 1;
     return Math.random() < 0.5 ? 0 : 1;
   }
@@ -136,11 +152,12 @@ export class HostServer {
   removePlayer(id) {
     const player = this.players.get(id);
     const entry = this.conns.get(id);
+    // Forget them before closing: closing fires 'close', which calls back here.
     this.conns.delete(id);
+    this.players.delete(id);
     entry?.rel?.close();
     entry?.state?.close();
     if (!player) return;
-    this.players.delete(id);
     this.broadcast({ t: 'leave', id });
     this.broadcast({ t: 'feed', text: `${player.name} left` });
   }
@@ -153,11 +170,15 @@ export class HostServer {
 
     const player = this.players.get(id);
     if (!player) return;
+    player.lastSeen = performance.now() / 1000; // (any message, incl. 'ping')
+    if (msg.t === 'bye') return this.removePlayer(id); // closed their tab
+    if (msg.t === 'ping') return this.sendTo(id, { t: 'pong', at: msg.at }); // (round-trip time, for the aim hack)
     if (msg.t === 'state') this.onState(player, msg);
     else if (msg.t === 'shoot') this.onShoot(player, msg);
     else if (msg.t === 'reload') this.onReload(player);
     else if (msg.t === 'weapon') this.onWeapon(player, msg.w);
     else if (msg.t === 'spawn') this.onSpawn(player, msg.w, msg.h ?? 0);
+    else if (msg.t === 'bots' && id === HOST_ID) this.bots.setFill(msg.n);
   }
 
   // Clients simulate their own movement and report the result. We trust it,
@@ -177,7 +198,7 @@ export class HostServer {
     const now = performance.now() / 1000;
     const weapon = WEAPONS[shooter.weapon];
     if (msg.w !== undefined && msg.w !== shooter.weapon) return; // fired before our switch arrived
-    const infinite = hackId(shooter.hack) === 'ammo';
+    const infinite = hasHack(shooter.hack, 'ammo');
     if (shooter.dead || now - shooter.lastShot < fireCooldown(weapon, shooter.hack) * 0.9 || now < shooter.switchEnd - 0.1) return;
     if (!infinite && (shooter.reloadEnd || shooter.ammo[shooter.weapon] <= 0)) return; // no shooting while reloading or empty
     if (!Number.isFinite(msg.yaw) || !Number.isFinite(msg.pitch)) return;
@@ -198,7 +219,9 @@ export class HostServer {
       dirs = [valid(msg.d) ? normalize(msg.d) : lookDir(msg.yaw, msg.pitch)];
     }
 
-    // Trace each shot; add up the damage per player hit.
+    // Trace each shot against the other players where the shooter saw them
+    // (see seenBy); add up the damage per player hit.
+    const seen = this.seenBy(msg.v);
     const ends = [];
     const hits = new Map(); // victim -> { damage, headshot }
     for (const dir of dirs) {
@@ -207,12 +230,9 @@ export class HostServer {
       let headshot = false;
       for (const p of this.players.values()) {
         if (p.team === shooter.team || p.dead) continue; // bullets pass through teammates
-        const head = headAABB(p.pos);
-        const body = bodyAABB(p.pos);
-        const th = rayAABB(origin, dir, head.min, head.max);
-        const tb = rayAABB(origin, dir, body.min, body.max);
-        const t = Math.min(th, tb);
-        if (t < dist) { dist = t; victim = p; headshot = th <= tb; }
+        const pose = seen(p);
+        const hit = rayPlayer(origin, dir, pose.pos, pose);
+        if (hit.t < dist) { dist = hit.t; victim = p; headshot = hit.headshot; }
       }
       dist = Math.min(dist, MAX_RANGE);
       ends.push(origin.map((o, i) => round(o + dir[i] * dist)));
@@ -228,6 +248,42 @@ export class HostServer {
       : { t: 'shot', from: shooter.id, w: shooter.weapon, o: origin.map(round), e: ends[0] });
 
     for (const [victim, { damage, headshot }] of hits) this.applyHit(shooter, victim, damage, headshot, origin, now);
+  }
+
+  // Lag compensation. Clients draw the other players between two snapshots,
+  // INTERP_DELAY behind (plus the trip from the host), and say which with
+  // each shot: v = [snapshot n before, snapshot n after, fraction between].
+  // Returns p => the pose a player had there (position, aim, weapon, and
+  // velocity for the head's lean; skin: body size), as the shooter saw it. Without v (bots),
+  // or once those snapshots are older than HISTORY: where they are now.
+  seenBy(v) {
+    const find = (n) => this.history.find((h) => h.n === n);
+    const latest = this.history.at(-1);
+    let a = Array.isArray(v) ? find(v[0]) : null;
+    let b = Array.isArray(v) ? find(v[1]) : null;
+    const k = Array.isArray(v) && Number.isFinite(v[2]) ? Math.min(1, Math.max(0, v[2])) : 1;
+    if (!a || !b) a = b = null;
+    return (p) => {
+      let pa = a?.players.get(p.id);
+      let pb = b?.players.get(p.id);
+      if (!pa || !pb) {
+        // Now; velocity from the last two snapshots.
+        const prev = this.history.at(-2)?.players.get(p.id);
+        const last = latest?.players.get(p.id);
+        const vel = prev && last ? last.pos.map((x, i) => (x - prev.pos[i]) * SNAPSHOT_RATE) : undefined;
+        return { pos: p.pos, yaw: p.yaw, pitch: p.pitch, weapon: p.weapon, vel, skin: p.skin };
+      }
+      if (Math.hypot(pb.pos[0] - pa.pos[0], pb.pos[2] - pa.pos[2]) > 3) pa = pb; // respawned (as the client draws it)
+      const steps = Math.max(1, b.n - a.n);
+      return {
+        pos: pa.pos.map((x, i) => x + (pb.pos[i] - x) * k),
+        yaw: pa.yaw + Math.atan2(Math.sin(pb.yaw - pa.yaw), Math.cos(pb.yaw - pa.yaw)) * k,
+        pitch: pa.pitch + (pb.pitch - pa.pitch) * k,
+        weapon: pb.weapon,
+        vel: pb.pos.map((x, i) => ((x - pa.pos[i]) * SNAPSHOT_RATE) / steps),
+        skin: p.skin,
+      };
+    };
   }
 
   applyHit(shooter, victim, damage, headshot, origin, now) {
@@ -259,7 +315,7 @@ export class HostServer {
 
   onReload(player) {
     const weapon = WEAPONS[player.weapon];
-    if (player.dead || player.reloadEnd || player.ammo[player.weapon] >= weapon.magSize || hackId(player.hack) === 'ammo') return;
+    if (player.dead || player.reloadEnd || player.ammo[player.weapon] >= weapon.magSize || hasHack(player.hack, 'ammo')) return;
     player.reloadEnd = performance.now() / 1000 + weapon.reloadTime - RELOAD_GRACE;
   }
 
@@ -270,11 +326,11 @@ export class HostServer {
     this.giveWeapon(player, index);
   }
 
-  // The buy menu's Start: spawn with that weapon and hack (when the respawn
+  // The buy menu's Start: spawn with that weapon and hacks (when the respawn
   // delay is over, if they can afford both; charged at the spawn).
   onSpawn(player, index, hack) {
-    if (!player.dead || !Number.isInteger(index) || !WEAPONS[index] || !Number.isInteger(hack) || !HACKS[hack]) return;
-    if (WEAPONS[index].price + HACKS[hack].price > player.money) return;
+    if (!player.dead || !Number.isInteger(index) || !WEAPONS[index] || !Number.isInteger(hack) || hack < 0 || hack > ALL_HACKS) return;
+    if (WEAPONS[index].price + hacksPrice(hack) > player.money) return;
     player.spawnWeapon = index;
     player.spawnHack = hack;
   }
@@ -328,9 +384,17 @@ export class HostServer {
   tick() {
     const now = performance.now() / 1000;
 
+    // Players gone silent (closed / crashed tab, lost connection).
+    for (const p of [...this.players.values()]) {
+      if (p.id !== HOST_ID && !this.bots.isBot(p.id) && now - (p.lastSeen ?? now) > PLAYER_TIMEOUT) this.removePlayer(p.id);
+    }
+
     if (this.roundOverAt && now >= this.roundOverAt) this.newRound();
     if (!this.roundOverAt) this.spawnPlayers(now); // (victory screen: nobody spawns)
     if (!this.roundOverAt) this.updatePickups(now);
+    const dt = Math.min(0.1, now - this.lastTick);
+    this.lastTick = now;
+    this.bots.update(now, dt);
 
     for (const p of this.players.values()) {
       if (p.reloadEnd && now >= p.reloadEnd) {
@@ -346,17 +410,17 @@ export class HostServer {
   spawnPlayers(now) {
     for (const p of this.players.values()) {
       if (p.dead && p.spawnWeapon >= 0 && now >= p.respawnAt) {
-        const price = WEAPONS[p.spawnWeapon].price + HACKS[p.spawnHack].price;
+        const price = WEAPONS[p.spawnWeapon].price + hacksPrice(p.spawnHack);
         if (price > p.money) { p.spawnWeapon = -1; continue; }
         p.money -= price;
-        if (hackId(p.spawnHack) === 'victory') {
+        if (hasHack(p.spawnHack, 'victory')) {
           this.victory(p, now);
           return; // (round over)
         }
         const spawn = this.spawnPoint(p.team, p.id);
         p.pos = spawn.pos;
         p.hack = p.spawnHack;
-        p.maxHp = hackId(p.hack) === 'hp' ? HACK_HP : MAX_HP;
+        p.maxHp = hasHack(p.hack, 'hp') ? HACK_HP : MAX_HP;
         p.hp = p.maxHp;
         p.dead = false;
         p.ammo = WEAPONS.map((w) => w.magSize);
@@ -375,6 +439,9 @@ export class HostServer {
   sendSnapshots(now) {
     this.lastSnapshot = now;
     const all = [...this.players.values()];
+    const n = ++this.snapSeq;
+    this.history.push({ n, players: new Map(all.map((p) => [p.id, { pos: [...p.pos], yaw: p.yaw, pitch: p.pitch, weapon: p.weapon }])) });
+    if (this.history.length > HISTORY) this.history.shift();
     const players = all.map((p) => ({
       id: p.id,
       name: p.name,
@@ -397,7 +464,7 @@ export class HostServer {
     // Hacks are secret from the other team: each team's snapshot carries
     // only its own players' hacks (h).
     const byTeam = [0, 1].map((team) => ({
-      t: 'snap', pk, pt,
+      t: 'snap', n, pk, pt,
       players: players.map((s, i) => (all[i].team === team ? { ...s, h: all[i].hack } : s)),
     }));
     for (const p of all) this.sendTo(p.id, byTeam[p.team], false);
@@ -435,6 +502,7 @@ export class HostServer {
   }
 
   destroy() {
+    this.bots.removeAll();
     for (const id of [...this.conns.keys()]) this.removePlayer(id);
     this.peer.destroy();
   }

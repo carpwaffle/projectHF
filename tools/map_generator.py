@@ -239,6 +239,26 @@ def wall_frame(vis, col, m, half, post, sill, top, mat_index=0):
         col.box(lo, hi, m)
 
 
+PARAPET_H = 1.05  # top of a roof parapet's cap above the roof
+
+
+def parapet(vis, col, local, wall_mat, half=1.0, extend=0.0):
+    """A roof parapet 2 * half m long (local x along the edge, y inward, z up
+    from the roof): a solid wall with a capping on top that overhangs it a
+    little (and its ends by 0.05 m, closing outside corners). extend: the
+    wall reaches this much further at both ends (corners that aren't square).
+    Collision to its full height."""
+    a = half + extend
+    vis.box((-a, 0, 0), (a, 0.2, PARAPET_H - 0.1), local, wall_mat)
+    vis.box((-a - 0.05, -0.05, PARAPET_H - 0.1), (a + 0.05, 0.25, PARAPET_H), local, 0)
+    col.box((-a, 0, 0), (a, 0.2, PARAPET_H), local)
+
+
+def parapet_material(style):
+    """The parapet's wall material: the style's parapet kit piece's."""
+    return kit_mesh(style['parapet']).materials[0]
+
+
 def finish_player_block(block, cols, name, parent):
     """Player-only collision (COLP_*): blocks movement, not bullets."""
     if block.bm.faces:
@@ -258,15 +278,23 @@ def pick_wall(rand, style, floor, door, enterable):
     return kit_mesh(window) if rand.random() < (0.45 if floor == 0 else 0.6) else kit_mesh(style['wall'])
 
 
+BEVEL = 0.05  # rounded edges on generated visual boxes (m): a soft, toy-like look
+
+
 class MeshBuilder:
     """Accumulates boxes / prisms into one mesh object (for collision or for
-    generated visual geometry)."""
+    generated visual geometry). bevel: round the edges of boxes this much
+    (visual geometry only; collision stays sharp)."""
 
-    def __init__(self):
+    def __init__(self, bevel=0.0, segments=2):
         self.bm = bmesh.new()
         self.uv = self.bm.loops.layers.uv.new('UVMap')
+        self.bevel = bevel
+        self.segments = segments
 
-    def box(self, lo, hi, matrix=Matrix.Identity(4), mat_index=0):
+    def box(self, lo, hi, matrix=Matrix.Identity(4), mat_index=0, rounded=True):
+        """rounded=False: no bevel (e.g. stair steps, interior walls: hardly
+        seen, and many)."""
         size = [h - l for l, h in zip(lo, hi)]
         if min(size) <= 0:
             return
@@ -275,6 +303,13 @@ class MeshBuilder:
         res = bmesh.ops.create_cube(self.bm, size=1.0, matrix=m)
         for f in {f for v in res['verts'] for f in v.link_faces}:
             f.material_index = mat_index
+        # Bevel (not on very thin boxes: trims, frames), at most 40% of the
+        # thinnest side; a plain chamfer on small boxes (e.g. steps).
+        width = min(self.bevel, 0.4 * min(size))
+        if self.bevel and rounded and width >= 0.015:
+            edges = list({e for v in res['verts'] for e in v.link_edges})
+            bmesh.ops.bevel(self.bm, geom=edges, offset=width, segments=self.segments if min(size) > 0.5 else 1,
+                            profile=0.5, affect='EDGES', clamp_overlap=True)
 
     def prism(self, polygon, z0, z1, matrix=Matrix.Identity(4), mat_index=0, bottom=False, top_mat=None, bottom_mat=None):
         """Vertical extrusion of a 2D polygon (counter-clockwise)."""
@@ -333,10 +368,10 @@ def stair_flight(vis, col, frame, run, z0, rise=FLOOR_H, half=0.95, steps=15, to
     wall (their capsule stops 0.35 m short of it)."""
     slope = run - top
     for s in range(steps):
-        vis.box((-half, s * slope / steps, z0), (half, (s + 1) * slope / steps, z0 + (s + 1) * rise / steps), frame, 0)
+        vis.box((-half, s * slope / steps, z0), (half, (s + 1) * slope / steps, z0 + (s + 1) * rise / steps), frame, 0, rounded=False)
     col.wedge(-half, half, 0, slope, z0, z0 + rise, frame)
     if top > 0:
-        vis.box((-half, slope, z0), (half, run, z0 + rise), frame, 0)
+        vis.box((-half, slope, z0), (half, run, z0 + rise), frame, 0, rounded=False)
         col.box((-half, slope, z0), (half, run, z0 + rise), frame)
 
 
@@ -493,7 +528,7 @@ class Building:
         root = new_empty(cols, self.name, self.x, self.y, self.angle)
         root['floors'] = self.floors
         root['enterable'] = self.enterable
-        vis = MeshBuilder()  # generated visual geometry (stairs, partitions, cover)
+        vis = MeshBuilder(BEVEL)  # generated visual geometry (stairs, partitions, cover, parapets)
         col = MeshBuilder()
         block = MeshBuilder()
         st = self.style
@@ -545,21 +580,34 @@ class Building:
                         col.box((i * CELL, j * CELL, z - (0.5 if f == base else 0.2)), ((i + 1) * CELL, (j + 1) * CELL, z))
                 if base > 0:  # concrete underside of a bridge
                     z = PLOT_H + base * FLOOR_H
-                    vis.box((i * CELL, j * CELL, z - 0.5), ((i + 1) * CELL, (j + 1) * CELL, z - 0.21), mat_index=0)
+                    vis.box((i * CELL, j * CELL, z - 0.5), ((i + 1) * CELL, (j + 1) * CELL, z - 0.21), mat_index=0, rounded=False)
             if (i, j, top) not in holes:
                 place(cols, roof_mesh, root, Matrix.Translation((cx, cy, PLOT_H + top * FLOOR_H + 0.21)))
 
-        # Parapets along roof edges that drop to a lower roof or the ground.
+        # Parapets along roof edges that drop to a lower roof or the ground
+        # (every roof can be reached: jumping, the fly hack). Cell edges in a
+        # straight line at the same height are merged into one run.
+        runs = {}  # (side, line, top) -> [position along the edge, ...]
         for (i, j) in sorted(self.cells):
             top = self.levels[(i, j)][1]
             for side, (dx, dy) in DIRS.items():
                 if self.levels.get((i + dx, j + dy), (0, 0))[1] >= top or (i, j, side) in roof_gap:
                     continue
-                mx, my = (i + 0.5 + dx / 2) * CELL, (j + 0.5 + dy / 2) * CELL
+                runs.setdefault((side, j if dy else i, top), []).append(i if dy else j)
+        for (side, line, top), cells in runs.items():
+            dx, dy = DIRS[side]
+            cells.sort()
+            start = cells[0]
+            for k, c in enumerate(cells):
+                if k + 1 < len(cells) and cells[k + 1] == c + 1:
+                    continue
+                mid = (start + c + 1) / 2 * CELL  # along the edge
+                edge = (line + 0.5 + (dx or dy) / 2) * CELL  # across it
+                mx, my = (mid, edge) if dy else (edge, mid)
                 local = Matrix.Translation((mx, my, PLOT_H + top * FLOOR_H)) @ rot_for_normal(dx, dy)
-                place(cols, kit_mesh(st['parapet']), root, local)
-                if self.enterable or self.roof_stairs:
-                    col.box((-1, 0, 0), (1, 0.2, 1.0), local)
+                parapet(vis, col, local, wall_mat=2, half=(c + 1 - start) * CELL / 2)
+                if k + 1 < len(cells):
+                    start = cells[k + 1]
 
         if not self.enterable:
             for (base, top) in sorted(set(self.levels.values())):
@@ -571,7 +619,7 @@ class Building:
 
         if vis.bm.faces:
             vis.finish(cols, 'Visual', f'{self.name}_Generated', root,
-                       materials=[material('MI_Concrete'), material('MI_InteriorWall')])
+                       materials=[material('MI_Concrete'), material('MI_InteriorWall'), parapet_material(st)])
         else:
             vis.bm.free()
         col.finish(cols, 'Collision', f'COL_{self.name}', root, wire=True)
@@ -601,10 +649,10 @@ class Building:
                 segs = [(a, door), (door + 1.4, b)]
                 for (s0, s1) in segs:
                     lo, hi = ((line - 0.1, s0, z0), (line + 0.1, s1, z1)) if axis == 'x' else ((s0, line - 0.1, z0), (s1, line + 0.1, z1))
-                    vis.box(lo, hi, mat_index=1)
+                    vis.box(lo, hi, mat_index=1, rounded=False)
                     col.box(lo, hi)
                 lo, hi = ((line - 0.1, door, z0 + 2.3), (line + 0.1, door + 1.4, z1)) if axis == 'x' else ((door, line - 0.1, z0 + 2.3), (door + 1.4, line + 0.1, z1))
-                vis.box(lo, hi, mat_index=1)
+                vis.box(lo, hi, mat_index=1, rounded=False)
                 col.box(lo, hi)
 
         # Low cover walls.
@@ -676,7 +724,7 @@ class Octagon:
         root = new_empty(cols, self.name, 0, 0, 0)
         root['floors'] = self.floors
         root['enterable'] = True
-        vis = MeshBuilder()
+        vis = MeshBuilder(BEVEL)
         col = MeshBuilder()
         st, ap = self.style, self.apothem
 
@@ -694,12 +742,10 @@ class Octagon:
                         mesh = kit_mesh(st['wall'])
                         place(cols, mesh, root, local)
                         wall_collision(col, mesh.name, local)
-        # Roof parapet (walkable roof, so it has collision).
+        # Roof parapet: one run per side, reaching into the corners.
         for k, nx, ny, tx, ty in self.sides():
-            for off in (-2.0, 0.0, 2.0):
-                local = Matrix.Translation((nx * ap + tx * off, ny * ap + ty * off, self.top)) @ rot_for_normal(nx, ny)
-                place(cols, kit_mesh(st['parapet']), root, local)
-                col.box((-1, 0, 0), (1, 0.2, 1.0), local)
+            local = Matrix.Translation((nx * ap, ny * ap, self.top)) @ rot_for_normal(nx, ny)
+            parapet(vis, col, local, wall_mat=5, half=self.SIDE / 2, extend=0.1)
 
         # Floor slabs (inset 0.1 m so their edges hide inside the walls), each
         # with the stairwell hole of the flight arriving from below.
@@ -740,7 +786,7 @@ class Octagon:
 
         vis.finish(cols, 'Visual', f'{self.name}_Generated', root, uv_scale=0.5,
                    materials=[material('MI_Concrete'), material('MI_InteriorWall'), material('MI_InteriorFloor'),
-                              material('MI_InteriorRoof'), material('MI_Asphalt')])
+                              material('MI_InteriorRoof'), material('MI_Asphalt'), parapet_material(st)])
         col.finish(cols, 'Collision', f'COL_{self.name}', root, wire=True)
         return root
 
@@ -789,7 +835,7 @@ def north_buildings():
     out.append(Building(
         'House02', 0, 0, 0,
         [(rect_cells(12, 12, 20, 20), 0, 3), (rect_cells(20, 12, 30, 20), 0, 2)],
-        'metal', True,
+        'brick', True,  # (was 'metal': its corrugated texture striped the walls)
         doors={(12, 9, 'N'), (7, 6, 'S'), (9, 7, 'E', 2)},
         stairs=[(0, [(7, 9), (8, 9), (9, 9)], (1, 0), 0.75),
                 (1, [(8, 8), (7, 8), (6, 8)], (-1, 0)),
@@ -916,7 +962,7 @@ def build_octagon_plot(cols, octa):
 def build_props(cols, buildings):
     root = new_empty(cols, 'Props', 0, 0, 0)
     # One-storey concrete walls on the roads.
-    vis, col = MeshBuilder(), MeshBuilder()
+    vis, col = MeshBuilder(0.12), MeshBuilder()
     for (x, y, along_x) in COVER + [(-x, -y, ax) for x, y, ax in COVER]:
         hx, hy = (2.0, 0.5) if along_x else (0.5, 2.0)
         vis.box((x - hx, y - hy, 0), (x + hx, y + hy, COVER_H))
@@ -936,7 +982,7 @@ def build_props(cols, buildings):
     # Billboards: two posts and a panel (bullet-proof cover), across the roof
     # 1.8 m from the middle, on the side facing the centre (local -Y for
     # these 6 x 6 m buildings turned 45 degrees; their twins match).
-    vis, col = MeshBuilder(), MeshBuilder()
+    vis, col = MeshBuilder(BEVEL), MeshBuilder()
     for b in buildings:
         if b.name not in BILLBOARD_ROOFS:
             continue
@@ -983,7 +1029,7 @@ def build_ring(cols):
     the map."""
     root = new_empty(cols, 'Ring', 0, 0, 0)
     col = MeshBuilder()
-    vis = MeshBuilder()
+    vis = MeshBuilder(0.25, segments=1)
     half = RING_SEGMENTS // 2
     for k in range(RING_SEGMENTS):
         rand = random.Random(f'{SEED}-ring-{k % half}')

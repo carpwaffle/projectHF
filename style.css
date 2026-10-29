@@ -67,6 +67,7 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #000; font-f
 .buyCols { display: grid; grid-template-columns: 1fr 1.3fr; gap: 14px; }
 @media (max-width: 640px) { .buyCols { grid-template-columns: 1fr; } }
 .buyCols h3 { margin: 0 0 6px; font-size: 13px; color: #aaa; text-transform: uppercase; letter-spacing: 2px; }
+.buyCols h3 small { text-transform: none; letter-spacing: 0; font-weight: normal; color: #777; }
 #buyHacks { display: flex; flex-direction: column; gap: 4px; }
 #buyHacks label { display: flex; flex-direction: row; align-items: center; gap: 10px; padding: 6px 10px; border: 1px solid #333; border-radius: 4px; cursor: pointer; color: #eee; font-size: 14px; }
 #buyHacks label:has(input:checked) { border-color: #2d6cdf; background: rgba(45, 108, 223, 0.18); }
@@ -76,6 +77,9 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #000; font-f
 .buy .name small { display: block; font-size: 11px; color: #999; margin-top: 1px; }
 #buyTotal { text-align: center; color: #ccc; font-size: 15px; }
 #buyTotal.over { color: #ff6b5e; }
+#botRow { display: flex; justify-content: center; align-items: center; gap: 8px; font-size: 13px; color: #aaa; }
+#botRow[hidden] { display: none; }
+#botRow select { background: #222; color: #eee; border: 1px solid #555; border-radius: 4px; padding: 3px 6px; font: inherit; }
 #hackName { position: absolute; right: 20px; bottom: 166px; font-size: 13px; color: #ffcf5a; text-shadow: 0 0 4px #000; letter-spacing: 1px; }
 #minimap { position: absolute; left: 16px; bottom: 16px; width: 220px; height: 220px; border: 2px solid rgba(255, 255, 255, 0.6); border-radius: 6px; background: #111; opacity: 0.92; }
 #minimap[hidden] { display: none; }

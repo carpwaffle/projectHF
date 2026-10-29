@@ -53,7 +53,7 @@ LM_SIZE = 2048  # lightmap resolution (~7-8 texels per metre on this map)
 # space so bilinear filtering and mipmaps don't pull in black.
 LM_PAD = 1
 LM_BAKE_MARGIN = 4
-LM_SAMPLES = 256
+LM_SAMPLES = 1024  # (flat-coloured surfaces show sampling noise that textures used to hide)
 LM_MAX = 2.5  # stored value 1.0 = this much light (headroom for bright sun)
 LM_EXPOSURE = 1.9  # the brightest outdoor surfaces (98th percentile) end up here
 LM_AMBIENT = 0.08  # added everywhere
@@ -61,8 +61,16 @@ LM_AMBIENT = 0.08  # added everywhere
 # spots (closed rooms) gain DARK_LIFT, outdoor shade (~0.8) about a quarter
 # of that, and sunlit surfaces almost nothing. Brightens rooms without
 # flattening the outdoors.
-DARK_LIFT = 0.35
+DARK_LIFT = 0.42
 DARK_KNEE = 0.3
+WELD = 0.002  # (m) vertices closer than this are merged (see merged_visual)
+# Ambient occlusion: a second bake, multiplied in, darkens corners, the
+# joins of floors and walls and the edges of steps (indoors, where there's
+# little direct light, they'd look flat). 1 - AO_STRENGTH = fully occluded.
+AO_DISTANCE = 1.0  # (m) how far occluders count
+AO_STRENGTH = 0.85
+AO_CURVE = 0.5  # < 1: partly occluded spots (near corners, under steps' edges) darken more
+AO_RAW = os.path.join(OUT, 'ao_raw.npy')
 OUTER_SCALE = 0.1  # lightmap resolution of the ground outside the ring, relative
 OUTER_R = 51.0  # faces on the ground beyond this radius count as "outside"
 
@@ -70,12 +78,13 @@ OUTER_R = 51.0  # faces on the ground beyond this radius count as "outside"
 SUN_FROM = Vector((30, -20, 50))  # Blender coordinates
 # In Cycles a sky of strength S lights open ground about as much as a sun of
 # strength pi * S, so these give sunlit ground ~2.2x the shade.
-SUN_STRENGTH = 8.0
-SUN_ANGLE = math.radians(1.5)  # angular size: slightly soft shadow edges
+SUN_STRENGTH = 12.0
+SUN_ANGLE = math.radians(5)  # angular size: soft shadow edges
+SUN_COLOUR = (1.0, 0.93, 0.82)  # warm afternoon sun
 SKY_COLOUR = (0.55, 0.72, 1.0)
 BOUNCE_ALBEDO = 0.7  # grey of the bake material: lighter carries window light deeper into rooms
 DIFFUSE_BOUNCES = 6  # (Cycles default 4) more bounces also reach further indoors
-SKY_STRENGTH = 1.8
+SKY_STRENGTH = 1.5
 
 
 def select(collections):
@@ -99,7 +108,8 @@ def select_objects(objs):
 
 def export(path, **opts):
     bpy.ops.export_scene.gltf(filepath=path, export_format='GLB', use_selection=True,
-                              export_yup=True, export_apply=True, export_extras=False, **opts)
+                              export_yup=True, export_apply=True, export_extras=False,
+                              **opts)
     print(f'wrote {os.path.relpath(path, ROOT)} ({os.path.getsize(path) // 1024} KB)')
 
 
@@ -107,7 +117,8 @@ def export(path, **opts):
 
 def merged_visual():
     """World-space copy of every Visual mesh, joined into one object 'Map'
-    with a single UV set 'UVMap' (the textures') and no colour attributes."""
+    with a single UV set 'UVMap' (the textures'), no colour attributes, and
+    touching pieces welded."""
     col = bpy.data.collections.new('Baked')
     bpy.context.scene.collection.children.link(col)
     parts = []
@@ -134,6 +145,17 @@ def merged_visual():
     bpy.ops.object.join()
     merged = bpy.context.view_layer.objects.active
     merged.name = 'Map'
+    # Weld the kit pieces where they touch (wall pieces side by side, floor
+    # by floor): one continuous surface gets one lightmap island, so the
+    # baked light flows across a wall instead of stepping at every 2 m piece.
+    # (Per-corner texture UVs are unaffected.)
+    bm = bmesh.new()
+    bm.from_mesh(merged.data)
+    before = len(bm.verts)
+    bmesh.ops.remove_doubles(bm, verts=bm.verts, dist=WELD)
+    print(f'welded: {before} -> {len(bm.verts)} vertices')
+    bm.to_mesh(merged.data)
+    bm.free()
     return merged
 
 
@@ -176,6 +198,7 @@ def setup_lighting():
     sun = bpy.data.objects.new('Sun', bpy.data.lights.new('Sun', 'SUN'))
     sun.data.energy = SUN_STRENGTH
     sun.data.angle = SUN_ANGLE
+    sun.data.color = SUN_COLOUR
     sun.rotation_euler = SUN_FROM.to_track_quat('Z', 'Y').to_euler()  # light travels along -Z
     scene.collection.objects.link(sun)
 
@@ -225,9 +248,19 @@ def bake(obj):
         obj.data.materials[i] = mat
     select_objects([obj])
     bpy.ops.object.bake(type='DIFFUSE', pass_filter={'DIRECT', 'INDIRECT'}, use_clear=True, margin=LM_BAKE_MARGIN)
+    # Ambient occlusion, into a second image.
+    ao = bpy.data.images.new('AOBake', LM_SIZE, LM_SIZE, float_buffer=True)
+    node.select = False
+    ao_node = nodes.new('ShaderNodeTexImage')
+    ao_node.image = ao
+    ao_node.select = True
+    nodes.active = ao_node
+    bpy.context.scene.world.light_settings.distance = AO_DISTANCE
+    print(f'baking ambient occlusion ({AO_DISTANCE} m)')
+    bpy.ops.object.bake(type='AO', use_clear=True, margin=LM_BAKE_MARGIN)
     for i, m in enumerate(real):
         obj.data.materials[i] = m
-    return img
+    return img, ao
 
 
 def blur(a, radius=1, sigma=0.75):
@@ -241,16 +274,16 @@ def blur(a, radius=1, sigma=0.75):
     return a
 
 
-def raw_pixels(img):
-    """The baked image as an H x W x 3 float array, also cached for --retone."""
+def raw_pixels(img, path):
+    """A baked image as an H x W x 3 float array, also cached for --retone."""
     px = np.empty(LM_SIZE * LM_SIZE * 4, np.float32)
     img.pixels.foreach_get(px)
     rgb = px.reshape(LM_SIZE, LM_SIZE, 4)[..., :3].copy()
-    np.save(RAW, rgb)
+    np.save(path, rgb)
     return rgb
 
 
-def save_lightmap(rgb, path):
+def save_lightmap(rgb, ao, path):
     size = rgb.shape[0]
     lum = rgb.mean(axis=2)
     lit = lum[lum > 1e-4]
@@ -260,6 +293,9 @@ def save_lightmap(rgb, path):
     rgb = blur(rgb) * (LM_EXPOSURE / ref)
     light = rgb.mean(axis=2, keepdims=True)
     rgb = rgb + DARK_LIFT * DARK_KNEE / (light + DARK_KNEE) + LM_AMBIENT
+    if ao is not None:
+        occlusion = 1 - np.clip(blur(ao).mean(axis=2, keepdims=True), 0, 1)
+        rgb = rgb * (1 - AO_STRENGTH * occlusion ** AO_CURVE)
     v = np.clip(rgb / LM_MAX, 0, 1)
     srgb = np.where(v <= 0.0031308, v * 12.92, 1.055 * np.power(v, 1 / 2.4) - 0.055)
     out = bpy.data.images.new('Lightmap', size, size, alpha=False)
@@ -277,7 +313,7 @@ def save_lightmap(rgb, path):
 if RETONE:
     if not os.path.exists(RAW):
         sys.exit('no raw bake yet: run a full `npm run build:map` first')
-    save_lightmap(np.load(RAW), os.path.join(OUT, 'lightmap.png'))
+    save_lightmap(np.load(RAW), np.load(AO_RAW) if os.path.exists(AO_RAW) else None, os.path.join(OUT, 'lightmap.png'))
     sys.exit(0)
 
 lightmap_meta = None
@@ -285,18 +321,20 @@ if BAKE:
     merged = merged_visual()
     lightmap_uvs(merged)
     setup_lighting()
-    image = bake(merged)
-    save_lightmap(raw_pixels(image), os.path.join(OUT, 'lightmap.png'))
+    image, ao_image = bake(merged)
+    save_lightmap(raw_pixels(image, RAW), raw_pixels(ao_image, AO_RAW), os.path.join(OUT, 'lightmap.png'))
     merged.hide_render = False
     select_objects([merged])
     export(os.path.join(OUT, 'map_visual.glb'))
     lightmap_meta = {'file': 'map_lightmap.ktx2', 'intensity': LM_MAX}
 else:
     lightmap_png = os.path.join(OUT, 'lightmap.png')
-    for stale in (lightmap_png, RAW):  # the optimiser / --retone must not pair them with this map
+    for stale in (lightmap_png, RAW, AO_RAW):  # the optimiser / --retone must not pair them with this map
         if os.path.exists(stale):
             os.remove(stale)
-    select(['Buildings', 'Visual'])
+    merged = merged_visual()
+    merged.hide_render = False
+    select_objects([merged])
     export(os.path.join(OUT, 'map_visual.glb'))
 
 select(['Buildings', 'Collision'])

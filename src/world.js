@@ -76,16 +76,19 @@ export class World {
     }
     const steps = Math.max(1, Math.ceil(dt / SUBSTEP));
     for (let i = 0; i < steps; i++) {
-      if (input.noclip) this.substepNoclip(player, dt / steps);
+      if (input.noclip) this.substepNoclip(player, dt / steps, input.fly !== undefined);
       else this.substep(player, dt / steps, input.fly !== undefined);
     }
   }
 
   // No-clip: no collision with walls or ceilings, but floors (any surface
   // below, up to a step high) are stood on, and the arena boundary holds.
-  substepNoclip(player, h) {
+  // flying (with the fly hack too): no gravity, up to the fly ceiling.
+  substepNoclip(player, h, flying = false) {
     const { pos, vel } = player;
-    if (player.onGround && vel[1] <= 0) vel[1] = 0;
+    if (flying) {
+      // (vertical speed set by stepPlayer)
+    } else if (player.onGround && vel[1] <= 0) vel[1] = 0;
     else vel[1] -= GRAVITY * h;
     const x = pos[0] + vel[0] * h;
     const z = pos[2] + vel[2] * h;
@@ -103,7 +106,7 @@ export class World {
       player.onGround = true;
     }
     pos[0] = x;
-    pos[1] = y;
+    pos[1] = flying ? Math.min(FLY_MAX_Y, y) : y;
     pos[2] = z;
     this.keepInside(player);
   }

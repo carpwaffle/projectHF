@@ -12,7 +12,11 @@ npm start              # or: python3 -m http.server 8080
 ```
 
 Open http://localhost:8080, click **Host Game**, then open a second tab or
-another computer, enter the room code, and click **Join**.
+another computer, enter the room code, and click **Join**. Easier: the
+host's address bar shows `…/?room=CODE` once the room is up; whoever opens
+that link gets the code filled in and just enters a name and clicks **Join**.
+Players who close their tab (or crash, or lose their connection) are removed
+within a few seconds.
 
 ES modules don't load from `file://`, so you need a local server. To play
 with friends over the internet, put these static files on any host, such as
@@ -20,8 +24,10 @@ GitHub Pages, Netlify or itch.io.
 
 Controls: WASD move · Space jump · Mouse aim · Click shoot · R reload · Q / E fly up / down (fly hack) · Shift aim lock (aim hack) · 1-6 / wheel switch weapon (only for the player named "Admin") · Right mouse scope (sniper) · M mute · Tab scoreboard · Esc release mouse.
 
-**Hacks.** The core of the game: in the same menu you also buy one hack
-(separately from the weapon: you pay for both), active until your next death.
+**Hacks.** The core of the game: in the same menu you also buy hacks, as
+many as you can afford (ticked boxes; you pay for the weapon and each hack),
+active until your next death. They combine: e.g. fly + no-clip flies up
+through floors and ceilings; with speed + fly the speed hack's 3x applies.
 Teammates can see each other's hacks on the scoreboard; the other team can't.
 
 | Hack | Price | Effect |
@@ -37,8 +43,8 @@ Teammates can see each other's hacks on the scoreboard; the other team can't.
 | Aim | $900 | Hold Shift: the view locks onto the head of the visible enemy nearest the crosshair |
 | Victory | $10,000 | Your team wins the round: 10 s victory screen, then a new round (money, kills and hacks reset) |
 
-**Money.** Everyone starts with $0 (the player named "Admin" with $999,999, for testing) and earns $4 for every second they stay
-alive (paid when they die) and $250 per kill; the scoreboard (Tab) and the
+**Money.** Everyone starts with $0 (the player named "Admin" with $999,999, for testing) and earns $8 for every second they stay
+alive (paid when they die) and $500 per kill; the scoreboard (Tab) and the
 bottom-left of the HUD show it. On joining and after every death a menu lets
 you pick the weapon to spawn with: the pistol is free, the others cost money
 (revolver $250, P90 / shotgun $400, rifle $500, sniper $650); what you can't
@@ -108,7 +114,7 @@ To add a character, drop its FBX into `fbx/Character/`, rebuild, and add its
 name to `SKINS` in `src/assets.js`. Texture sizes for the kit are set by
 `TEXTURE_SIZE` in `tools/optimize_assets.mjs`.
 
-Dev pages: `preview.html` (character animations), `kit.html` (every city kit
+Dev pages: `preview.html` (character animations with every gun, third or first person), `kit.html` (every city kit
 piece with names, plus draw calls, triangles and GPU texture memory).
 
 ## The map
@@ -138,8 +144,15 @@ npm run build:lightmap  # ~20 s: redo only the brightness settings (LM_*, DARK_*
 The map's lighting is baked into a lightmap (`assets/models/map_lightmap.ktx2`):
 sun + sky with shadows and bounced light, done by Cycles in
 `tools/export_map.py` (settings at the top: sun direction/strength, sky,
-exposure, dark lift, ambient). The game draws the baked map unlit (texture × lightmap),
+exposure, dark lift, ambient). The game draws the baked map unlit (colour × lightmap),
 which is cheaper than real-time lights; characters still use dynamic lights.
+
+**The look:** the kit's own textures × the baked light. Touching wall
+pieces are welded before the bake, so the light runs across a wall without
+seams, and a baked ambient-occlusion pass (`AO_*`) darkens corners and step
+edges. Generated boxes (parapets, cover walls, billboards, frames, boundary
+blocks) have rounded edges (`BEVEL` in `tools/map_generator.py`). Characters
+are fully matte (Lambert, no highlights) with a faint fuzz at the edges (`softShading` in `src/assets.js`).
 
 Then reload the game. `npm run blueprint` renders `maps/blueprint_base.png`, a
 top-down image of the current map with a 2 m grid, for sketching changes on.
@@ -170,6 +183,8 @@ A ring of facades closes the arena; the game also keeps players inside the
 | `src/net.js` | PeerJS host/join; room code → peer ID |
 | `src/config.js` | STUN/TURN servers used to connect players |
 | `src/host.js` | The in-browser game server |
+| `src/bots.js` | AI players (bots), run by the host |
+| `src/nav.js`, `src/nav-worker.js` | The bots' navigation graph (built from the map's collision in a worker) and A* paths |
 | `src/main.js` | Menu, input, local movement, interpolation, HUD |
 | `src/render.js` | three.js scene, first-person rifle, tracers |
 | `src/character.js` | Animated player character: clip blending, aim, rifle in hand, left-hand IK |
@@ -202,6 +217,13 @@ A ring of facades closes the arena; the game also keeps players inside the
   snapshots, so they move smoothly.
 - **The host tick** runs from a Web Worker timer, so the game keeps running
   when the host switches tabs.
+- **Bots** (AI players): the host picks "Bots: fill teams to N vs N" in the
+  buy menu (remembered in that browser). Bots fill each team up to that size
+  and leave as people join. They're named `[BOT] …`, run on the host only
+  (about 0.05 ms per bot per tick; nothing extra for other players), buy
+  weapons with their money but never hacks, and can't reach the billboard
+  roofs (House07/15). The first time, the host builds a navigation graph from
+  the map's collision in a background worker (about 2 s).
 
 ## Known limitations / next steps
 
@@ -209,8 +231,10 @@ A ring of facades closes the arena; the game also keeps players inside the
   spread (so their tracer shows where the shot really went), and the host can
   change anything. That's fine among friends. Fix it with server-side movement plus
   client prediction and reconciliation.
-- **No lag compensation:** shots are checked against where players are on the
-  host *now*. High-ping players have to lead their targets.
+- **Lag compensation** (up to 0.6 s back): each shot says which snapshots the
+  shooter was seeing, and the host checks it against the players there. So a
+  target can still be hit just after ducking behind a wall, and a cheating
+  client could claim an older view, within that 0.6 s.
 - **Host leaves → game ends.** Host migration would fix this.
 - **Connections:** see "Can't join?" below.
 - No leave button yet: reload the page to leave a game.

@@ -51,7 +51,10 @@ export function loadAssets(webglRenderer) {
       load(webglRenderer, 'anims_female.glb'),
       Promise.all(gunIds.map((id) => load(webglRenderer, `${id}.glb`))),
     ]);
-    SKINS.forEach((name, i) => { assets.characters[name] = characters[i].scene; });
+    SKINS.forEach((name, i) => {
+      assets.characters[name] = characters[i].scene;
+      softShading(characters[i].scene);
+    });
     for (const [gender, gltf] of [['male', male], ['female', female]]) {
       assets.clips[gender] = Object.fromEntries(gltf.animations.map((clip) => [clip.name, clip]));
     }
@@ -60,6 +63,40 @@ export function loadAssets(webglRenderer) {
     return assets;
   })();
   return loading;
+}
+
+// Characters in a soft, matte, toy-like style (like plush toys): lit with
+// no specular at all (Lambert: no highlights, no shine), plus a faint fuzz
+// round the silhouette in the surface's own colour (where it turns away
+// from the camera), not a white reflection. The materials are shared by
+// every player's copy of the model, so this runs once per skin.
+const FUZZ_STRENGTH = 0.22;
+const FUZZ_POWER = 3.0; // higher: a thinner fuzz
+const matte = new Map(); // original material -> matte copy
+function softShading(scene) {
+  scene.traverse((o) => {
+    if (!o.isMesh) return;
+    const swap = (m) => {
+      if (!m?.isMeshStandardMaterial) return m;
+      if (!matte.has(m)) {
+        const soft = new THREE.MeshLambertMaterial({
+          name: m.name, color: m.color, map: m.map, vertexColors: m.vertexColors,
+          transparent: m.transparent, opacity: m.opacity, alphaTest: m.alphaTest, side: m.side,
+        });
+        soft.onBeforeCompile = (shader) => {
+          shader.fragmentShader = shader.fragmentShader.replace('#include <opaque_fragment>', `
+            // (normal and vViewPosition are in view space; vViewPosition points at the camera)
+            outgoingLight += diffuseColor.rgb * ${FUZZ_STRENGTH.toFixed(2)} * pow(1.0 - saturate(dot(normal, normalize(vViewPosition))), ${FUZZ_POWER.toFixed(1)});
+            #include <opaque_fragment>`);
+        };
+        soft.customProgramCacheKey = () => 'matte';
+        matte.set(m, soft);
+        m.dispose();
+      }
+      return matte.get(m);
+    };
+    o.material = Array.isArray(o.material) ? o.material.map(swap) : swap(o.material);
+  });
 }
 
 // The map: visual scene, collision scene, metadata (spawns, play radius,

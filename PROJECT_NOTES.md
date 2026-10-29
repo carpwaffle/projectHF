@@ -1188,7 +1188,7 @@ standing: sniper within 3 cm, revolver 6 cm, pistol / rifle 30 cm, P90 42 cm.
 
 ## 33. Hacks (2026-10-28)
 
-The game's core: one hack per life, bought in the buy menu next to the
+The game's core: one hack per life (since section 38: any number), bought in the buy menu next to the
 weapon (both paid for), active until death. `HACKS` in shared.js (index =
 network number): none, map 300, speed 400, recoil 400, ammo 500, wall 600,
 fly 700, noclip 800, aim 900, hp 1200, victory 10000.
@@ -1290,3 +1290,455 @@ colour behind it; the fog only started at 80 m. Now (render.js
   first try at ~0.3 linear rendered almost white). Point-symmetric like
   before. Map 107k -> 49k triangles, 3.4 -> 1.9 MB; 9 -> 12 draw calls.
 - Boundary blocks lightened to sit with the skyline (base colours ~0.13-0.21 linear, bluish grey). (2026-10-28)
+
+## 36. Invite links; removing players who quit (2026-10-28)
+
+- **Room code in the URL**: hosting or joining sets `?room=CODE`
+  (`history.replaceState`); opening such a link fills in the join code
+  ("Invited to room …"). The host leaving clears it (the room is gone).
+- **Quitting players stayed in the game**: WebRTC often doesn't report a
+  closed tab / crash / lost connection, so the host never removed them.
+  Now: clients send `ping` every second (a Web Worker timer, so background
+  tabs keep it up; also from the buy menu, when no `state` is sent); the
+  host stamps `lastSeen` on any message and drops players silent for
+  `PLAYER_TIMEOUT` (6 s). On `pagehide` the client leaves on purpose and
+  sends `bye` (removed at once). Clients leave ("Lost connection to host")
+  when the host has been silent for `HOST_TIMEOUT` (8 s).
+- `removePlayer` forgets the player before closing their connections
+  (closing fires 'close', which called it again: "left" was announced twice).
+- Verified with two tabs: invite link pre-fills and joins; closing the
+  joiner's tab removed them within 1.5 s (one "left" message); a silent
+  player was dropped after 6.1 s.
+
+## 37. Bots (AI players) (2026-10-29)
+
+- Host-only setting in the buy menu: "Bots (AI players): fill teams to
+  Off / 1 vs 1 … 4 vs 4" (`localStorage` `hackfps.bots`; message
+  `{t:'bots', n}` accepted from the host only). `BotManager.balance` adds or
+  removes one bot per tick so each team has `fill` players; people count
+  first (`pickTeam` now picks the team with fewer *people*, then fewer
+  players), so a joiner replaces a bot. Bots are named `[BOT] Alex` and so on,
+  ids `bot-N`. They have no connection: `sendTo` hands their messages to
+  `Bot.onMessage`, and they act through `onSpawn` / `onShoot` / `onReload`,
+  so damage, money, pickups and victory work as for people. They're exempt
+  from the heartbeat timeout.
+- **Navigation** (`nav-worker.js`): a 0.5 m grid. Each column is
+  raycast down (all hits) for upward-facing floors with headroom, and each
+  floor is kept if a 0.42 m capsule fits. Edges go to the 8 neighbours:
+  walk if the step up is at most 0.4 m and the midpoint fits; a drop of up
+  to 3.5 m is one-way, with open air checked. Only the largest connected
+  area is kept: 39k nodes, 33.6k usable, 285k edges. The graph is built
+  in a module worker (CDN URLs, since workers have no import map) in
+  about 1.8 s; on the main thread it took 6 s and froze the host.
+  `nav.js` does A* with a binary heap: 0–30 ms across the map, and one
+  search per host tick.
+  - Bug found: storing `g` in a Float32Array made A* reopen nodes forever,
+    because rounding up made the same path look cheaper. It now uses Float64.
+  - Bug found: the one-way edge direction was inverted, so bots tried to
+    drop *up* onto the landing.
+  - Bug found: a waypoint counted as reached when the floor above was
+    within 0.6 m horizontally, which made bots walk down the stairs again.
+    It now needs a height difference under 0.5 m.
+- **Brain** ("normal"):
+  - Perception every 0.1 s: enemies within 70 m that are in a 150° view
+    cone (all around within 6 m, or the one that hit them), with a line of
+    sight to the head or chest, and not spawn-protected.
+  - Reaction time 0.3–0.55 s.
+  - Aim turns at up to 7 rad/s. The aim error starts at 0.05–0.11 rad and
+    settles by 1/e every 0.6 s down to a jitter. 20% of engagements aim at
+    the head.
+  - Shots: semi-auto weapons add 0.08–0.22 s between shots; automatic
+    weapons fire in bursts beyond 15 m. Weapon spread is applied the same
+    way as for people.
+  - Fights: strafe, close in or back off to a per-weapon range, and never
+    step off a ledge (`safeStep` checks the graph).
+  - Goals: a heal spot when below 50% HP, a weapon spot while holding the
+    pistol, sometimes money, otherwise somewhere near a random enemy or a
+    random node. A lost enemy is chased to where it was last seen (4 s).
+  - When stuck: jump, then pick a new goal.
+  - Buying: one of the 3 most expensive weapons they can afford (15% of
+    the time the pistol), and never a hack.
+- Measured with 7 bots: 0.35 ms per host tick on average.
+  - Bots crossed the map, climbed House08 to the 3rd floor, took weapon
+    spots and fought: 8 kills in 25 s.
+  - A fake joiner replaced a bot, which came back when the joiner timed out.
+  - Off removes all the bots.
+  - No console errors.
+
+## 38. Several hacks at once (2026-10-29)
+
+- Replaces "one hack per life": the buy menu's hack column is checkboxes
+  (heading "Hacks (any number)"), and the total is the weapon plus every
+  ticked hack.
+  - An unticked option is locked when it doesn't fit in the money left.
+    Ticked ones can always be unticked.
+  - Last life's picks are kept if they're affordable. If not, the priciest
+    hacks are dropped first.
+- **Data:** a player's hacks are a bit mask: bit i is `HACKS[i]`, and 0 means
+  none. The `'none'` entry was removed from `HACKS`.
+  - New helpers in `shared.js`: `hasHack(mask, id)`, `hackList`, `hacksPrice`,
+    `hackBit` and `ALL_HACKS`. These replace `hackId` and `hackIndex`.
+  - The mask is sent in `spawn.h`, `respawn.h` and the snapshot `h`, which
+    teammates only receive, as before.
+  - The host validates `0 <= h <= ALL_HACKS` and charges `hacksPrice`.
+  - Victory in the mask still ends the round at spawn.
+- **Combinations:**
+  - Speed + fly moves at 3x (the speed hack wins over the fly hack's 1.3x).
+  - Fly + no-clip: `substepNoclip(player, h, flying)` turns gravity off and
+    caps the height at `FLY_MAX_Y`. You fly up through ceilings and land on
+    floors when descending. Tested at House08: up to 18.2 m, then down onto
+    the 15 m roof. Fly alone is still stopped by the ceiling.
+- HUD lists every active hack ("Map hack · Speed hack · …"); the scoreboard's
+  "Hacks" column lists teammates' as "Map, Speed, Wall, …".
+- Verified as Admin with map + speed + wall + fly + HP:
+  - Charged $2,800, max HP 1500.
+  - The minimap and the wall hack were both on.
+  - The HUD and scoreboard listed all five.
+
+## 39. Aim hack leads moving targets (2026-10-29)
+
+- **Why it missed moving targets:** other players are drawn `INTERP_DELAY`
+  (100 ms) in the past. The shot then reaches the host half a round trip
+  later, and the host checks it against where the target is at that moment.
+  A target running at 7 m/s was about 0.6–1 m ahead of the head the hack
+  locked onto. The head hitbox is 0.32 m wide.
+- **Fix:**
+  - `aimLock` aims at the drawn head plus the target's velocity ×
+    (`INTERP_DELAY` + `rtt`).
+  - `velocityOf(id)` takes the latest snapshot against the one two before it
+    (about 100 ms apart, less jitter). It is zeroed above 30 m/s, which means
+    a respawn.
+  - Vertical velocity is included, for jumps and falls.
+- **RTT:** the heartbeat `ping` now carries `at`; the host answers
+  `{t:'pong', at}`, and the client keeps a smoothed `rtt` (0 for the host's
+  own client, which gets snapshots directly).
+- **Measured on the host, with moving bots over 15 s (2,482 samples):** the
+  distance from the aim point to the target's real position on the host fell
+  from 0.59 m to 0.10 m on average.
+  - The maximum is still about 0.7 m, at the moment a target reverses
+    direction.
+  - A joining tab measured an RTT of 1.1 ms (same machine).
+
+## 40. Money rewards doubled (2026-10-29)
+
+- `SURVIVAL_RATE` 4 -> 8 dollars per second alive, `KILL_REWARD` 250 -> 500.
+
+## 41. Toy-town look; solid roof parapets (2026-10-29)
+
+Aiming for a look like Party Animals: bright, saturated, clean colours,
+soft warm light, rounded edges. The user picked options 1–4 of the
+suggestions (repaint, lighting, bevels, character shading). Post-processing,
+"juice" and new characters were not done.
+
+- **Guardrail bug:**
+  - The roof parapets were the kit's `Brick_Plain_1` / `Metal_Plain_1`:
+    two vertical sheets 0.2 m apart with no top face.
+  - They only had collision on enterable buildings or ones with roof stairs.
+    Walking off the House03/11 roofs (money spots) dropped you to the street,
+    and the same happened on House07/15 except where the billboard blocks.
+  - Now `parapet()` generates them: a solid 0.2 m wall plus a capping that
+    overhangs 0.05 m (top at `PARAPET_H` 1.05 m), with collision on every
+    building, House08 included.
+  - Cell edges in a straight line are merged into one run per edge, which
+    means no 2 m grooves and fewer triangles.
+  - Verified: walking off any roof is blocked in all 8 directions. Jumping
+    over (about 1.22 m) is still possible, as before.
+- **Repaint** (`export_map.py` `paint()`): every face of the merged map gets a
+  `Col` colour attribute, exported as `COLOR_0`. `optimize_assets.mjs` now
+  keeps the map's COLOR_0.
+  - The role is decided per face:
+    - Kit faces are classified by their own base-colour texture at the face's
+      UV centre (64×64 downsampled): luminance below 0.22 means accent,
+      saturation below 0.13 means trim, anything else is wall.
+    - Generated geometry and ground objects are classified by material and
+      object name: roof (`MI_Asphalt` on a building), glass, interior walls,
+      floors and ceilings, road, sidewalk, cover (`#ffc46b`), billboard, and
+      the ring blocks.
+  - `BUILDING_PALETTE` holds wall / accent / roof per building. Twins share
+    colours, except the team bases: House01 is blue (`#7fb0ff`) and House09
+    is red (`#ff8a7a`).
+  - Wall pieces vary by ±1.5% (4% looked patchy).
+  - The whole map is now one `MapPaint` material: 12 draw calls down to 1,
+    and no textures.
+  - `render.js` `setMap` uses `vertexColors` (no map) when the geometry has
+    colours.
+- **Bevels** (`MeshBuilder(bevel)`, `bmesh.ops.bevel`, at most 40% of the
+  thinnest side):
+  - `BEVEL` 0.05 m on generated building and billboard boxes, 0.12 m on the
+    road cover walls, and 0.25 m with a single segment on the boundary blocks.
+  - None on stair steps, interior partitions or bridge undersides
+    (`rounded=False`).
+  - Triangles: 49k before. Bevelling everything gave 123k; skipping the steps
+    and partitions and merging the parapet runs brings it to 72k.
+- **Lighting:**
+  - Warm sun (`SUN_COLOUR` 1, .93, .82), soft shadows (`SUN_ANGLE` 5°).
+  - Sun 8 → 12, sky 1.8 → 1.5, which gives more shadow contrast.
+  - The bake material's albedo is now the paint × `BOUNCE_ALBEDO`, so a little
+    colour bleeds onto neighbouring surfaces.
+  - `LM_EXPOSURE` 1.9 → 1.4: bright paint times bright light had washed
+    everything to white. `LM_AMBIENT` 0.08 → 0.04, `DARK_LIFT` 0.35 → 0.45.
+  - `LM_SAMPLES` 256 → 1024: flat colours showed blotchy bake noise that the
+    textures used to hide. The build now takes about 2.5 min.
+- **Characters** (`assets.js` `softShading`):
+  - Matte materials: roughness at least 0.85, metalness 0.
+  - A view-space fresnel rim added via `onBeforeCompile`: warm white × 0.55,
+    power 2.5.
+  - Hemisphere fill 2.0 → 2.5 so characters aren't dark against the bright map.
+- **Not changed:**
+  - The horizon skyline and sky (`render.js`), which still match well enough.
+  - The window glass, which is now flat light blue.
+- **Notes:**
+  - Re-running `map_generator.py --force` discards Blender edits, as before.
+  - Faint lightmap texel and UV-seam patterns are visible only when pressed
+    against a flat wall.
+
+## 42. Textures back (pastel), interior shading, seamless walls (2026-10-29)
+
+User feedback on section 41: flat colours looked too childish (they want
+textures but keep the pastel look); interiors were hard to read (room
+corners, stair steps); walls (especially House08) looked patched together
+from rectangles.
+
+- **Pastel textures:**
+  - The export keeps the kit materials and textures again: 12 draw calls,
+    7 textures, 71k triangles. The paint (`Col` -> COLOR_0) stays, and the
+    single `MapPaint` material and the per-piece jitter are removed.
+  - `render.js` `paintedDetail` replaces `<map_fragment>`. It multiplies the
+    paint by the texture's brightness relative to its local average (the
+    same texture sampled with mip bias +5, i.e. 32-texel blur). That is mixed
+    with 25% of the texture's own colour ratio (`TEXTURE_HUE`), at strength
+    `TEXTURE_DETAIL` 0.7.
+  - The result: brick shows as brick, but in the building's pastel colour.
+  - `DETAIL_BY_MATERIAL`: `MI_Trim` is set to 0. Its plaster wall pieces
+    (e.g. `Trim_Plain_3`) are flat but split into strips mapped to different
+    bands of the trim sheet, so any detail made a grid of patches.
+- **Seams:** `merged_visual` welds vertices closer than 2 mm
+  (`remove_doubles`; 78k -> 39k vertices) before the lightmap UVs. Coplanar
+  wall pieces become one Smart-UV island, so the baked light no longer steps
+  at every 2 m piece. Combined with the zero jitter and zero `MI_Trim`
+  detail, House08's wall is one clean surface.
+- **Interiors:**
+  - A second Cycles bake of type `AO` (`AO_DISTANCE` 1 m) is saved as
+    `build/blender/ao_raw.npy` (retone works with it).
+  - It is multiplied in after the lift:
+    `light × (1 − AO_STRENGTH·occlusion^AO_CURVE)`, with 0.85 and 0.5.
+  - `DARK_LIFT` 0.45 -> 0.3: the flat lift had washed out the occlusion
+    indoors.
+  - Room corners, floor/wall joins, doorway edges and stair steps now read
+    clearly.
+  - First tries (strength 0.55 and 0.7, lift 0.45) were invisible in game.
+    Viewing the lightmap alone (map and paint off) showed the AO was there
+    but drowned by the lift.
+- **Browser cache gotcha:** `map_lightmap.ktx2` keeps its name, so after
+  `npm run build:lightmap` the browser can keep the old file. Reload it with
+  `fetch(url, {cache: 'reload'})` or a hard reload.
+- The green buildings' metal siding (`MI_Trim_MetalConcrete`) shows bold
+  horizontal bands from the corrugated texture. This can be tuned in
+  `DETAIL_BY_MATERIAL` if wanted.
+
+## 43. Pastel removed; House02/10 brick (2026-10-29)
+
+- The user asked to drop the pastel entirely. Removed:
+  - `paint()`, the palette and the role classification from `export_map.py`.
+  - `paintedDetail` from `render.js`.
+  - Keeping COLOR_0 in `optimize_assets.mjs`.
+  - The paint as bake albedo; the bake material is grey `BOUNCE_ALBEDO`
+    again.
+- The map is the kit's textures × lightmap again: 12 draw calls, 69k
+  triangles.
+- Kept from 41–42: solid parapets with collision, bevels, welded pieces (no
+  lighting seams), the AO pass, warm sun and soft shadows, `LM_SAMPLES` 1024,
+  and character rim and matte shading.
+- Exposure back to the textured values: `LM_EXPOSURE` 1.9, `LM_AMBIENT` 0.08.
+  `DARK_LIFT` is 0.42 (0.3 looked dim with the darker real textures),
+  `AO_STRENGTH` 0.85, `AO_CURVE` 0.5.
+- **House02/10 striped walls:** the 'metal' style's `Metal_Plain_3` pieces
+  use the corrugated, rusty half of `T_MetalConcrete`. They are now 'brick'
+  (plain red brick). 'pale' was tried first, but its `Brick_TopTrim` pieces
+  have a bold beige band at every floor, which is also horizontal stripes.
+  - House06/14 (solid, no entry) still use 'metal'.
+- House08's plaster shows the texture's faint stone-block lines, but no
+  patches.
+
+## 44. Character animation: flicker and wrists (2026-10-29)
+
+Reported: characters sometimes flicker between animations; arms bend
+unrealistically (wrists) while holding guns. Measured with 7 bots (counters
+per avatar per frame) and in `preview.html`, driven from the console: weapon,
+reload, all moves, pitch ±1.2.
+
+- **Flicker 1: the jump clip on stairs.**
+  - `air` came from `|v.y| > 1.2`, but running up or down stairs is about
+    4 m/s vertically, so every bot blended into the jump clip on stairs.
+  - Now `airborne` comes from the height above the surface below
+    (`state.ground`, the shadow raycast):
+    - It needs to be over 0.3 m for `AIR_DELAY` 0.1 s, or over 0.8 m at once,
+      so kerbs and step edges don't trigger it.
+    - It ends below 0.08 m (the same logic now also drives landing sounds).
+- **Flicker 2: idle/run flips on short stops.**
+  - The speed the clips see (`speedHold`) rises at once but falls at most
+    `SPEED_FALL` 25 m/s².
+  - The movement direction is only updated from the real speed.
+  - Remote players pass `vel` from the two bracketing snapshots
+    (`main.js`), smoothed like the position-based estimate. It was previously
+    differentiated per frame from interpolated positions.
+- **Bots** caused much of the stopping:
+  - While waiting for the next A* search they stood still; they now coast in
+    their last direction for `COAST` 0.4 s (if `safeStep` allows).
+  - The steering lookahead (`path[step+1]`) could be the node just below the
+    bot after a drop edge. The direction to it was then arbitrary, and bots
+    pushed into walls at the House01 stair landing, jumping to get unstuck.
+    They now steer at `path[step]` when the lookahead is on another level or
+    within 0.4 m.
+- **Results** (7 bots, 30 s):
+  - Idle/run flips under 0.3 s: up to 43 (77 for the stuck bot), now 1–6.
+  - Airborne flashes under 0.25 s: up to 12, now 0–4 (real small drops and
+    jumps).
+- **Wrists:**
+  - `aimGun` used to rotate the gun *inside* the hand to the aim, while the
+    hand kept the clip's pose. That was up to 38° when backpedalling with the
+    long guns or aiming at ±1.2 rad, and 35° when strafing with the revolver.
+    It read as a broken wrist.
+  - Now `holdGun(yaw, pitch, …)` turns the right hand itself so that the gun,
+    unturned in its holder, points along the aim:
+    `hand = aimQ × holderQ⁻¹`.
+  - The palm target accounts for the grip offset turned with the hand.
+  - `swivelElbow` then swings the arm about the shoulder–wrist line (by at
+    most `ELBOW_SWIVEL` 1.2 rad) so the forearm meets the hand as in the idle
+    (`gripRest[…].forearmR`, calibrated in hand space).
+  - Left hand, when not in a procedural reload: turned on the gun as in the
+    idle (`leftInGun`), with the elbow swivelled to `forearmL`. The IK weight
+    now blends the hand bone too.
+  - Measured: the gun's turn in the hand is 0° in every state (was up to 38°).
+    Wrist bends stay within about ±15° of the idle's.
+  - Checked visually: rifle backpedal, aiming ±1.1 rad, pistol strafe and run,
+    sniper (female) strafe, revolver backpedal while firing, sniper and rifle
+    reloads.
+
+## 45. Matte characters; preview with every gun and first person (2026-10-29)
+
+- The characters looked too glossy (the user compared them with Party
+  Animals). `softShading` in `src/assets.js` now swaps each character
+  material (MeshStandardMaterial, vertex colours, roughness 0.85) for a
+  `MeshLambertMaterial`: diffuse only, no specular highlights at all.
+  - The warm white fresnel rim (×0.55) read as reflected light. It is
+    replaced by a faint "fuzz" in the surface's own colour
+    (`FUZZ_STRENGTH` 0.22, `FUZZ_POWER` 3), like a plush toy's edges.
+  - Guns are unchanged (separate materials, not passed through softShading).
+- Preview page (`preview.html`, `src/preview.js`):
+  - Same tone mapping (Neutral, 1.15) and lights (hemisphere 2.5, sun 2.6)
+    as the game, so characters look as they do in play.
+  - Buttons for all six guns, a Reload button (runs for the gun's
+    reloadTime), auto-fire at each gun's own cooldown.
+  - Third person / First person. First person is the game's view: fov 75,
+    head collapsed, eyes at `EYE_HEIGHT`; drag to look (moves the pitch
+    slider too), crosshair shown.
+- The eye placement moved from `Renderer.updateViewmodel` into
+  `Character.placeEyes(eye, yaw, pitch)` (with `VIEW_EYE`), shared by the
+  game and the preview.
+
+## 46. Left arm: shotgun / sniper wrist, and left-arm flicker (2026-10-29)
+
+- **Bug in section 44's wrist fix:** the left hand's lock onto the gun (idle
+  wrist, elbow swivel) ran only `if (!proc)`. `poseGun` returns an object
+  for every gun with a procedural reload (all but the rifle), even when not
+  reloading (progress -1), so the lock only ever applied to the rifle. The
+  other guns' left hands kept the clip's wrist rotation: wobbling on the gun
+  (up to 5.5° per frame) and bent down on the long guns.
+  - Now: `leftLock` (damped, rate 10) is 1 whenever the hand is on the gun
+    (no procedural reload, or past the reload path's last point) and 0 while
+    the reload path moves the hand. The swivel and the hand's turn are
+    weighted by it.
+- **Over-stretching:** the left arm's flicker came from the hand target
+  being out of reach. At 100% of the arm's length the elbow locks straight,
+  and the bend snaps on and off as the run cycle moves the shoulder.
+  - Shotgun grip at -0.30 needed 100% reach at idle (elbow 2°, fingers 22°
+    down); sniper -0.27: 97%. Rifle -0.26: 94% (elbow 40°).
+  - Grips moved: shotgun -0.24 (back half of the pump), sniper -0.23.
+  - The rifle went straight running backwards and strafing left (shoulder
+    pulled back by those clips).
+  - New `withinReach()` before `solveTwoBone`:
+    - Past `LEFT_REACH` (0.94 of the arm's length), the target slides back
+      along the gun toward the stock, up to `LEFT_SLIDE` (0.2 m).
+    - Past that, a soft tanh limit toward `LEFT_MAX` (0.985), so the arm
+      never quite locks (the hand may come up to ~1 cm off the gun).
+  - Slides: 3–8 cm at level aim when running back or strafing; up to ~20 cm
+    aiming almost straight up (the hand pulls back toward the receiver).
+- **Measured** (preview harness, 6 guns × 7 moves × {level, firing, pitch
+  ±1.1}, male and female):
+  - Elbow jolts beyond the hand's own motion: worst 0.6 cm (were up to
+    5.3 cm, with 60+ pops per 4 s).
+  - Straight-arm frames: 0 (were 100–240).
+  - Hand rotation on the gun: at most 0.6° per frame.
+  - Reload hand-overs are smooth. The remaining quick turns mid-reload are
+    the reload motions themselves.
+- Preview: `window.preview.orbit(yaw, pitch, distance)` for setting the
+  camera from the console.
+
+## 47. Hitboxes follow the drawn character; lag compensation (2026-10-29)
+
+The user reported that shots slightly off the centre of the head didn't land.
+There were two causes.
+
+**1. The head box wasn't where the head is drawn.**
+- Old head box: ±0.16 m straight over the feet, y 1.45–1.82.
+- The aiming animations lean into the gun:
+  - rifle standing: the drawn head is 0.19 m forward and 0.14 m right;
+  - running: 0.34 m forward;
+  - aiming down (-1 rad): 0.47 m forward and 0.17 m lower.
+- In random poses only ~25% of the drawn head was inside the old box.
+
+**Fix: `headCenter(pos, pose)` in shared.js.**
+- pose is `{ yaw, pitch, weapon, vel, skin }`.
+- The head swings about a pivot near the hips: (fwd -0.02, up 0.92), arm
+  0.71 m. Its angle is `0.30 - 0.46 * pitch` from upright (fitted within
+  ~3 cm over the pitch range -1.4..1.4).
+- Per hold style (`PISTOL_HOLD`: pistol, revolver):
+  - a sideways offset (rifle style: 0.14 m right);
+  - a lean when moving at full speed forward, back, left and right, scaled by
+    the velocity in the player's frame.
+- Female skins (index >= 4) are scaled by 0.955.
+- `HEAD_HALF` [0.15, 0.18]: the head is ~0.23 × 0.29 × 0.24 m, plus ~4 cm for
+  the run cycle's bob.
+- Body: `bodyAABBs` returns legs (0–0.95) over the feet and a chest
+  (0.95–1.45) centred halfway between the feet and the head (it leans with
+  the upper body).
+- `rayPlayer(o, d, pos, pose)` gives `{ t, headshot }`.
+- Users of these boxes:
+  - host hit test;
+  - client tracer stop;
+  - wall-hack boxes (3 now);
+  - aim hack (`avatar.pose`, set in `Renderer.updateAvatar`);
+  - bots' head aim.
+- Measured over random poses (all guns, pitch ±1.3, random moves):
+
+  | | Male | Female |
+  |---|---|---|
+  | Drawn head inside head box | 97% (was 24%) | 94% (was 25%) |
+  | Drawn torso and legs inside body boxes | 95% (was 92.5%) | 96% (was 94%) |
+
+  The worst leftovers are steep pitch plus diagonal backward moves (5–14 cm
+  off). The head's centre stays inside the box.
+
+**2. No lag compensation.**
+- Clients draw others INTERP_DELAY (100 ms) in the past, plus the trip from
+  the host, but the host tested shots against current positions: about
+  0.7 m off at full run, more than the head's width.
+- Now:
+  - Snapshots carry `n`. The host keeps the last `HISTORY` (12, 0.6 s) as
+    `{ n, players: id -> { pos, yaw, pitch, weapon } }`.
+  - Clients remember `viewing = [n before, n after, fraction]` in
+    `renderRemotePlayers` and send it as `v` with each shot.
+  - `HostServer.seenBy(v)` interpolates each player exactly as the client
+    drew them (the same 3 m respawn rule), with velocity from the two
+    snapshots.
+  - Missing or old `v` (bots, junk) uses current positions.
+- Unit-tested:
+  - rewind gives the drawn position and velocity;
+  - a shot at the drawn head of a running target hits with rewind and missed
+    without it.
+- Trade-off (in the README): you can be hit just after reaching cover; a
+  cheater could claim a view up to 0.6 s old.
+
+**Preview:** a Hitboxes button draws the three boxes live (yellow head, red
+body), with the preview's pose.

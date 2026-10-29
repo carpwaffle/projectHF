@@ -3,9 +3,9 @@
 // the `send` function differs.
 
 import {
-  STATE_SEND_RATE, INTERP_DELAY, EYE_HEIGHT, MAX_HP, MOVE_SPEED,
+  STATE_SEND_RATE, INTERP_DELAY, EYE_HEIGHT, MAX_HP, MOVE_SPEED, HOST_TIMEOUT,
   MAX_RANGE, TEAMS, WEAPONS, DEFAULT_WEAPON, SWITCH_TIME, RESPAWN_TIME, SPAWN_PROTECTION,
-  ADMIN_NAME, PICKUP_SPOTS, HACKS, hackId, SPEED_HACK, FLY_HACK_SPEED, RECOIL_HACK, fireCooldown, headAABB, lookDir, playerAABB, rayAABB, spreadFor, spreadDir,
+  ADMIN_NAME, PICKUP_SPOTS, HACKS, hasHack, hackList, hacksPrice, SPEED_HACK, FLY_HACK_SPEED, RECOIL_HACK, fireCooldown, headAABB, lookDir, rayPlayer, spreadFor, spreadDir,
 } from './shared.js';
 import { makeRoomCode, openHostPeer, joinRoom } from './net.js';
 import { HostServer, HOST_ID } from './host.js';
@@ -49,7 +49,7 @@ let roomLabel = '';
 const me = {
   pos: [0, 0, 0], vel: [0, 0, 0], onGround: true, yaw: 0, pitch: 0, hp: MAX_HP, dead: false,
   money: 0,
-  hack: 0, // index into HACKS, until our next death
+  hack: 0, // our hacks (bit mask, see HACKS), until our next death
   weapon: DEFAULT_WEAPON, lastWeapon: WEAPONS.findIndex((w) => w.id === 'rifle'), // index into WEAPONS
   ammo: WEAPONS.map((w) => w.magSize), // per weapon
   reloadEnd: 0, // performance.now() ms when the reload finishes, 0 = not reloading
@@ -60,7 +60,8 @@ const me = {
 };
 let deathInfo = null; // { killer, headshot, at } while dead
 let damageDirs = []; // [{ from:[x,z], at, el }] red arcs pointing at whoever hit us
-let snapshots = []; // [{ time, players: Map<id, playerState> }]
+let snapshots = []; // [{ time, n (the host's number), players: Map<id, playerState> }]
+let viewing = null; // the snapshots the other players are drawn between: [n before, n after, fraction]
 let latestPlayers = []; // most recent snapshot array, for the scoreboard
 let lastStateSent = 0;
 let lastShotTime = 0;
@@ -129,14 +130,18 @@ function readMoveInput() {
     jump: !!k('Space'),
     yaw: me.yaw,
     speed: speedHack(),
-    fly: hack() === 'fly' ? k('KeyQ') - k('KeyE') : undefined,
-    noclip: hack() === 'noclip',
+    fly: has('fly') ? k('KeyQ') - k('KeyE') : undefined,
+    noclip: has('noclip'),
   };
 }
 
 // ---- incoming messages -----------------------------------------------------
 
+let lastHostMessage = 0; // performance.now() ms, for HOST_TIMEOUT
+let rtt = 0; // round trip to the host (ms, smoothed; 0 for the host itself)
+
 function onMessage(msg) {
+  lastHostMessage = performance.now();
   switch (msg.t) {
     case 'welcome':
       me.dead = true; // until we pick a weapon in the buy menu
@@ -147,9 +152,14 @@ function onMessage(msg) {
       teleport(msg.pos, msg.yaw);
       me.protectedUntil = performance.now() + SPAWN_PROTECTION * 1000;
       break;
+    case 'pong': {
+      const sample = performance.now() - msg.at;
+      if (Number.isFinite(sample) && sample >= 0) rtt = rtt ? rtt * 0.8 + sample * 0.2 : sample;
+      break;
+    }
     case 'snap': {
       const players = new Map(msg.players.map((p) => [p.id, p]));
-      snapshots.push({ time: performance.now(), players });
+      snapshots.push({ time: performance.now(), n: msg.n, players });
       if (snapshots.length > 30) snapshots.shift();
       latestPlayers = msg.players;
       const mine = players.get(myId);
@@ -256,11 +266,11 @@ function teleport(pos, yaw) {
 
 // Ammo is predicted here for an instant HUD; the host keeps its own count
 // and ignores shots while reloading or empty.
-const hack = () => hackId(me.hack);
-const speedHack = () => (hack() === 'speed' ? SPEED_HACK : hack() === 'fly' ? FLY_HACK_SPEED : 1); // movement speed multiplier
+const has = (id) => hasHack(me.hack, id); // (one of our hacks)
+const speedHack = () => (has('speed') ? SPEED_HACK : has('fly') ? FLY_HACK_SPEED : 1); // movement speed multiplier
 
 function startReload(now) {
-  if (hack() === 'ammo') return; // infinite ammo: never reloads
+  if (has('ammo')) return; // infinite ammo: never reloads
   if (me.dead || me.reloadEnd || me.ammo[me.weapon] >= weapon().magSize) return;
   me.reloadEnd = now + weapon().reloadTime * 1000;
   session.send({ t: 'reload' }, true);
@@ -304,7 +314,7 @@ function tryShoot(now) {
   const pulled = w.auto ? mouseDown : triggerPressed; // semi-automatic: one shot per click
   triggerPressed = false;
   if (!pulled || me.dead || !locked() || now - lastShotTime < fireCooldown(w, me.hack) * 1000 || now < me.switchEnd) return;
-  const infinite = hack() === 'ammo';
+  const infinite = has('ammo');
   if (me.reloadEnd && !infinite) return;
   if (me.ammo[me.weapon] <= 0 && !infinite) return startReload(now); // pulling the trigger on empty reloads
   lastShotTime = now;
@@ -322,15 +332,14 @@ function tryShoot(now) {
     let dist = world.raycast(origin, dir, MAX_RANGE);
     for (const [id, avatar] of renderer.avatars) {
       if (avatar.dead || id === myId || avatar.team === myTeam) continue;
-      const box = playerAABB(avatar.object.position.toArray());
-      dist = Math.min(dist, rayAABB(origin, dir, box.min, box.max));
+      dist = Math.min(dist, rayPlayer(origin, dir, avatar.object.position.toArray(), avatar.pose).t);
     }
     pendingTracers.push({ end: origin.map((o, i) => o + dir[i] * dist), hit: dist < MAX_RANGE });
   }
 
   session.send(w.pellets
-    ? { t: 'shoot', w: me.weapon, yaw: me.yaw, pitch: me.pitch, ds: dirs }
-    : { t: 'shoot', w: me.weapon, yaw: me.yaw, pitch: me.pitch, d: aim }, true);
+    ? { t: 'shoot', w: me.weapon, yaw: me.yaw, pitch: me.pitch, ds: dirs, v: viewing }
+    : { t: 'shoot', w: me.weapon, yaw: me.yaw, pitch: me.pitch, d: aim, v: viewing }, true);
   if (me.ammo[me.weapon] === 0) startReload(now); // auto-reload when the magazine runs dry
 }
 
@@ -366,6 +375,7 @@ function renderRemotePlayers(now, dt) {
   }
   const span = b.time - a.time;
   const t = span > 0 ? Math.min(1, (renderTime - a.time) / span) : 1;
+  viewing = [a.n, b.n, Math.round(t * 1000) / 1000]; // (sent with shots: the host checks hits against this)
 
   for (const [id, pb] of b.players) {
     if (id === myId) continue;
@@ -374,8 +384,12 @@ function renderRemotePlayers(now, dt) {
     // Don't slide across the map when someone respawns.
     if (Math.hypot(pb.p[0] - pa.p[0], pb.p[2] - pa.p[2]) > 3) pa = pb;
     const pos = [0, 1, 2].map((i) => pa.p[i] + (pb.p[i] - pa.p[i]) * t);
+    // Velocity between the two snapshots (none between the same one: the
+    // character then works it out from the position).
+    const vel = pa !== pb && span > 0 ? [0, 1, 2].map((i) => (pb.p[i] - pa.p[i]) / (span / 1000)) : undefined;
     renderer.updateAvatar(id, pb.name, pb.skin, pb.team, {
       pos,
+      vel,
       ground: groundBelow(pos),
       yaw: lerpAngle(pa.yaw, pb.yaw, t),
       pitch: pa.pitch + (pb.pitch - pa.pitch) * t,
@@ -383,7 +397,7 @@ function renderRemotePlayers(now, dt) {
       reloading: !!pb.rl,
       protected: !!pb.sp,
       weapon: pb.w ?? 0,
-      fast: hackId(pb.h) === 'ammo', // (teammates only: enemies' hacks aren't sent)
+      fast: hasHack(pb.h ?? 0, 'ammo'), // (teammates only: enemies' hacks aren't sent)
     }, dt);
   }
 }
@@ -421,7 +435,7 @@ function updateScoreboard() {
   const table = $('scoreboard');
   table.replaceChildren();
   const header = table.insertRow();
-  for (const h of ['Team', 'Player', 'Kills', 'Money', 'Hack']) {
+  for (const h of ['Team', 'Player', 'Kills', 'Money', 'Hacks']) {
     const th = document.createElement('th');
     th.textContent = h;
     header.appendChild(th);
@@ -436,7 +450,7 @@ function updateScoreboard() {
     row.insertCell().textContent = p.score;
     row.insertCell().textContent = `$${p.m ?? 0}`;
     // Hacks: only teammates' (the host doesn't send the other team's).
-    row.insertCell().textContent = p.h === undefined ? '' : p.h ? HACKS[p.h].name.replace(/ hack$/, '') : '-';
+    row.insertCell().textContent = p.h === undefined ? '' : p.h ? hackList(p.h).map((h) => h.name.replace(/ hack$/, '')).join(', ') : '-';
   }
 }
 
@@ -505,12 +519,12 @@ function updateHud(now) {
   $('weaponName').textContent = isAdmin()
     ? WEAPONS.map((w, i) => (i === me.weapon ? `[${i + 1}] ${w.name}` : `${i + 1}`)).join('  ')
     : WEAPONS[me.weapon].name;
-  $('ammoCount').textContent = hack() === 'ammo' ? '∞' : me.ammo[me.weapon];
+  $('ammoCount').textContent = has('ammo') ? '∞' : me.ammo[me.weapon];
   $('magSize').textContent = weapon().magSize;
-  $('ammo').classList.toggle('empty', me.ammo[me.weapon] === 0 && hack() !== 'ammo');
-  $('hackName').textContent = me.hack && !me.dead ? HACKS[me.hack].name : '';
-  minimap.update(hack() === 'map' && !me.dead, me, myTeam);
-  renderer.wallHack = hack() === 'wall' && !me.dead;
+  $('ammo').classList.toggle('empty', me.ammo[me.weapon] === 0 && !has('ammo'));
+  $('hackName').textContent = me.hack && !me.dead ? hackList(me.hack).map((h) => h.name).join(' · ') : '';
+  minimap.update(has('map') && !me.dead, me, myTeam);
+  renderer.wallHack = has('wall') && !me.dead;
   updateVictory(now);
   $('scope').hidden = me.scope < 0.85;
   $('crosshair').hidden = $('crosshairTicks').hidden = me.scope > 0.05;
@@ -546,17 +560,18 @@ function updateHud(now) {
 
 let buy = null; // { readyAt (performance.now ms), sent } while the menu is open
 let buyChoice = DEFAULT_WEAPON; // remembered between deaths
-let buyHack = 0; // index into HACKS, remembered too
+let buyHacks = 0; // hacks picked (bit mask), remembered too
 
-// Radio options: name, price (and a description for hacks).
-function buyOptions(items, group, onPick) {
+// Options: name, price (and a description for hacks). Radio buttons (one
+// weapon) or checkboxes (any number of hacks): onPick(index, checked).
+function buyOptions(items, group, onPick, type = 'radio') {
   return items.map((item, i) => {
     const label = document.createElement('label');
     const input = document.createElement('input');
-    input.type = 'radio';
+    input.type = type;
     input.name = group;
     input.value = i;
-    input.addEventListener('change', () => onPick(i));
+    input.addEventListener('change', () => onPick(i, input.checked));
     const name = document.createElement('span');
     name.className = 'name';
     name.textContent = item.name;
@@ -589,13 +604,21 @@ function openBuyMenu(msg) {
     earned.textContent = `Survived ${msg.alive} s: +$${msg.earned}`;
     info.append(killed, earned);
   } else {
-    info.textContent = msg.round ? 'New round! Pick a weapon and a hack.' : 'Pick a weapon and a hack to start with.';
+    info.textContent = msg.round ? 'New round! Pick a weapon and any hacks.' : 'Pick a weapon and any hacks to start with.';
   }
   $('buyList').replaceChildren(...buyOptions(WEAPONS, 'buyWeapon', (i) => { buyChoice = i; }));
-  $('buyHacks').replaceChildren(...buyOptions(HACKS, 'buyHack', (i) => { buyHack = i; }));
-  // Last time's picks if still affordable (dropping the hack first).
-  if (WEAPONS[buyChoice].price + HACKS[buyHack].price > me.money) buyHack = 0;
+  $('buyHacks').replaceChildren(...buyOptions(HACKS, 'buyHack', (i, on) => {
+    buyHacks = on ? buyHacks | (1 << i) : buyHacks & ~(1 << i);
+  }, 'checkbox'));
+  // Last time's picks if still affordable: the weapon, then the hacks
+  // dropping the priciest first.
   if (WEAPONS[buyChoice].price > me.money) buyChoice = DEFAULT_WEAPON;
+  while (buyHacks && WEAPONS[buyChoice].price + hacksPrice(buyHacks) > me.money) {
+    const priciest = HACKS.reduce((best, h, i) => (buyHacks & (1 << i) && (best < 0 || h.price > HACKS[best].price) ? i : best), -1);
+    buyHacks &= ~(1 << priciest);
+  }
+  $('botRow').hidden = !session?.isHost;
+  $('botFill').value = String(botFill);
   $('buyMenu').hidden = false;
   if (document.pointerLockElement) document.exitPointerLock();
   updateBuyMenu(now);
@@ -614,16 +637,19 @@ function updateBuyMenu(now) {
   if (!buy.sent && document.pointerLockElement) document.exitPointerLock();
   $('buyMoney').textContent = `$${me.money.toLocaleString()}`;
   const weaponPrice = WEAPONS[buyChoice].price;
-  const hackPrice = HACKS[buyHack].price;
+  const hackPrice = hacksPrice(buyHacks);
+  // Locked: what can't be added with the rest of the picks (picked hacks can
+  // always be unticked).
   const mark = (list, items, chosen, otherPrice) => list.querySelectorAll('label').forEach((label, i) => {
     const input = label.firstChild;
-    const locked = items[i].price + otherPrice > me.money;
+    const on = chosen(i);
+    const locked = !on && items[i].price + otherPrice > me.money;
     label.classList.toggle('locked', locked);
     input.disabled = locked || buy.sent;
-    input.checked = i === chosen;
+    input.checked = on;
   });
-  mark($('buyList'), WEAPONS, buyChoice, hackPrice);
-  mark($('buyHacks'), HACKS, buyHack, weaponPrice);
+  mark($('buyList'), WEAPONS, (i) => i === buyChoice, hackPrice);
+  mark($('buyHacks'), HACKS, (i) => (buyHacks & (1 << i)) !== 0, weaponPrice + hackPrice);
   const total = weaponPrice + hackPrice;
   $('buyTotal').textContent = `Total $${total.toLocaleString()}`;
   $('buyTotal').classList.toggle('over', total > me.money);
@@ -634,10 +660,21 @@ function updateBuyMenu(now) {
 }
 
 $('buyStart').addEventListener('click', () => {
-  if (!buy || buy.sent || !session || WEAPONS[buyChoice].price + HACKS[buyHack].price > me.money) return;
+  if (!buy || buy.sent || !session || WEAPONS[buyChoice].price + hacksPrice(buyHacks) > me.money) return;
   buy.sent = true;
-  session.send({ t: 'spawn', w: buyChoice, h: buyHack }, true);
-  if (hackId(buyHack) !== 'victory') requestLock(); // (a click: allowed to lock the mouse)
+  session.send({ t: 'spawn', w: buyChoice, h: buyHacks }, true);
+  if (!hasHack(buyHacks, 'victory')) requestLock(); // (a click: allowed to lock the mouse)
+});
+
+// Host only: bots fill each team up to this many players (0 = none).
+// Remembered in this browser.
+let botFill = 0;
+try { botFill = Number(localStorage.getItem('hackfps.bots')) || 0; } catch { /* (storage blocked) */ }
+
+$('botFill').addEventListener('change', () => {
+  botFill = Number($('botFill').value);
+  try { localStorage.setItem('hackfps.bots', String(botFill)); } catch { /* (storage blocked) */ }
+  if (session?.isHost) session.send({ t: 'bots', n: botFill });
 });
 
 // ---- victory ---------------------------------------------------------------
@@ -677,10 +714,28 @@ function updateVictory(now) {
 
 // ---- aim hack ---------------------------------------------------------------
 // While Shift is held: snap the view onto the head of the visible enemy
-// closest to where we're aiming (in sight and on screen).
+// closest to where we're aiming (in sight and on screen), led by its
+// movement: other players are drawn INTERP_DELAY in the past, and the shot
+// reaches the host half a round trip from now, which checks it against
+// where they are then. So aim where the target will be (INTERP_DELAY + rtt)
+// ahead of where it's drawn.
+
+// A player's velocity (m/s) from the latest snapshots (zero if unknown or
+// they just respawned).
+function velocityOf(id) {
+  const b = snapshots[snapshots.length - 1];
+  const a = snapshots[Math.max(0, snapshots.length - 3)]; // ~100 ms earlier (less jitter than the last pair)
+  const pb = b?.players.get(id);
+  const pa = a?.players.get(id);
+  const dt = (b?.time - a?.time) / 1000;
+  if (!pa || !pb || !(dt > 0.02)) return [0, 0, 0];
+  const v = pb.p.map((x, i) => (x - pa.p[i]) / dt);
+  return Math.hypot(v[0], v[2]) > 30 ? [0, 0, 0] : v; // (teleported: respawn)
+}
 
 const _head = [0, 0, 0];
 function aimLock() {
+  const lead = (INTERP_DELAY + rtt) / 1000; // seconds
   const eye = [me.pos[0], me.pos[1] + EYE_HEIGHT, me.pos[2]];
   const view = lookDir(me.yaw, me.pitch);
   const halfFov = (renderer.camera.fov / 2) * (Math.PI / 180);
@@ -689,7 +744,7 @@ function aimLock() {
   let bestAngle = limit;
   for (const [id, avatar] of renderer.avatars) {
     if (avatar.dead || id === myId || avatar.team === myTeam) continue;
-    const head = headAABB(avatar.object.position.toArray());
+    const head = headAABB(avatar.object.position.toArray(), avatar.pose);
     for (let i = 0; i < 3; i++) _head[i] = (head.min[i] + head.max[i]) / 2;
     const d = _head.map((v, i) => v - eye[i]);
     const dist = Math.hypot(...d);
@@ -698,7 +753,8 @@ function aimLock() {
     if (angle >= bestAngle) continue;
     if (world.raycast(eye, dir, dist) < dist - 0.05) continue; // behind a wall
     bestAngle = angle;
-    best = d;
+    const v = velocityOf(id);
+    best = d.map((x, i) => x + v[i] * lead);
   }
   if (!best) return;
   me.yaw = Math.atan2(-best[0], -best[2]);
@@ -718,7 +774,7 @@ function frame(now) {
     if (!me.dead) world.stepPlayer(me, readMoveInput(), dt);
     updateReload(now);
     updateScope(dt, now);
-    if (hack() === 'aim' && (keys.has('ShiftLeft') || keys.has('ShiftRight')) && locked() && !me.dead) aimLock();
+    if (has('aim') && (keys.has('ShiftLeft') || keys.has('ShiftRight')) && locked() && !me.dead) aimLock();
     tryShoot(now);
 
     if (!me.dead && now - lastStateSent >= 1000 / STATE_SEND_RATE) {
@@ -729,7 +785,7 @@ function frame(now) {
     // Spread eases toward what the current movement allows.
     // (Flying counts as standing on the ground; the recoil hack cuts it 85%.)
     const speed = Math.hypot(me.vel[0], me.vel[2]) / speedHack();
-    const target = spreadFor(weapon(), speed, me.onGround || hack() === 'fly', me.scope > 0.95) * (hack() === 'recoil' ? RECOIL_HACK : 1);
+    const target = spreadFor(weapon(), speed, me.onGround || has('fly'), me.scope > 0.95) * (has('recoil') ? RECOIL_HACK : 1);
     me.spread += (target - me.spread) * (1 - Math.exp(-12 * dt));
 
     renderRemotePlayers(now, dt);
@@ -751,7 +807,7 @@ function frame(now) {
       reloading: !!me.reloadEnd,
       ground: me.onGround ? me.pos[1] : groundBelow(me.pos),
       weapon: me.weapon,
-      fast: hack() === 'ammo',
+      fast: has('ammo'),
       hidden: me.scope > 0.85, // looking through the scope
       eye,
     });
@@ -775,14 +831,16 @@ function frame(now) {
 requestAnimationFrame(frame);
 
 // For inspecting the game from the browser console while developing.
-window.hackfps = { renderer, me, world, audioDebug };
+window.hackfps = { renderer, me, world, audioDebug, velocityOf, rtt: () => rtt };
 
 // ---- host / join -----------------------------------------------------------
 
 // A Web Worker drives the host tick: worker timers aren't throttled as hard
 // as main-thread timers when the host tab is in the background.
-function startTicker(fn) {
-  const src = 'setInterval(() => postMessage(0), 1000 / 60);';
+// A steady timer in a Web Worker: unlike timers on the page, it isn't
+// slowed down while the tab is in the background.
+function startTicker(fn, rate = 60) {
+  const src = `setInterval(() => postMessage(0), ${1000 / rate});`;
   const worker = new Worker(URL.createObjectURL(new Blob([src], { type: 'text/javascript' })));
   worker.onmessage = fn;
   return () => worker.terminate();
@@ -805,8 +863,10 @@ function enterGame(code, isHost) {
   $('menu').hidden = true;
   $('hud').hidden = false;
   setStatus('');
-  roomLabel = isHost ? `Hosting · Room code: ${code} · share it with friends` : `Room ${code}`;
+  roomLabel = isHost ? `Hosting · Room code: ${code} · share this page's link with friends` : `Room ${code}`;
   showRoomInfo(); // (the host's own welcome has already arrived)
+  // The room code in the address bar: the whole URL is the invite.
+  history.replaceState(null, '', `${location.pathname}?room=${code}`);
   // No pointer lock yet: the game starts in the buy menu, which needs the
   // mouse pointer; its Start button locks it.
 }
@@ -815,6 +875,7 @@ function leaveGame(reason) {
   const old = session;
   session = null; // clear first: closing fires 'close' events that call back here
   old?.close();
+  if (old?.isHost) history.replaceState(null, '', location.pathname); // (the room is gone)
   myId = null;
   snapshots = [];
   latestPlayers = [];
@@ -879,11 +940,13 @@ $('hostBtn').addEventListener('click', async () => {
   peer.on('error', (err) => console.warn('peer error', err));
 
   session = {
+    isHost: true,
     send: (msg) => server.handleMessage(HOST_ID, msg),
     close: () => { stopTicker(); server.destroy(); },
   };
   server.handleMessage(HOST_ID, { t: 'join', name: playerName() });
   enterGame(code, true);
+  server.handleMessage(HOST_ID, { t: 'bots', n: botFill });
 });
 
 $('joinBtn').addEventListener('click', async () => {
@@ -908,16 +971,40 @@ $('joinBtn').addEventListener('click', async () => {
   const onLost = () => { if (session) leaveGame('Disconnected from host'); };
   rel.on('close', onLost);
   rel.on('error', onLost);
+  // Heartbeat (the host drops silent players) and host watchdog.
+  lastHostMessage = performance.now();
+  const stopHeartbeat = startTicker(() => {
+    if (rel.open) rel.send({ t: 'ping', at: performance.now() });
+    if (session && performance.now() - lastHostMessage > HOST_TIMEOUT * 1000) leaveGame('Lost connection to host');
+  }, 1);
 
   session = {
     send: (msg, reliable) => {
       const c = reliable ? rel : state;
       if (c.open) c.send(msg);
     },
-    close: () => peer.destroy(),
+    // Leaving on purpose (or closing the tab): tell the host first, so our
+    // character goes at once instead of after the timeout.
+    close: () => {
+      stopHeartbeat();
+      if (rel.open) rel.send({ t: 'bye' });
+      setTimeout(() => peer.destroy(), 50);
+    },
   };
   rel.send({ t: 'join', name: playerName() });
   enterGame(code, false);
 });
 
 $('codeInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('joinBtn').click(); });
+
+// Closing the tab / leaving the page: say goodbye (see session.close).
+window.addEventListener('pagehide', () => { if (session) leaveGame(); });
+
+// Opened from an invite link (…?room=CODE): fill in the code.
+{
+  const invited = new URLSearchParams(location.search).get('room')?.trim().toUpperCase();
+  if (invited && /^[A-Z0-9]{5}$/.test(invited)) {
+    $('codeInput').value = invited;
+    setStatus(`Invited to room ${invited}: enter your name and press Join`);
+  }
+}

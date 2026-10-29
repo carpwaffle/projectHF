@@ -4,16 +4,8 @@
 import * as THREE from 'three';
 import { Character, makeRifle, makeGun, MUZZLE } from './character.js';
 import { Tracers } from './effects.js';
-import { WEAPONS, ALL_SPOTS, PICKUP_RADIUS, TEAMS, headAABB, bodyAABB } from './shared.js';
+import { WEAPONS, ALL_SPOTS, PICKUP_RADIUS, TEAMS, headAABB, bodyAABBs } from './shared.js';
 
-// Where the camera sits relative to the head bone (metres, view-aligned:
-// side, up, forward), per holding style, blended when switching. A little
-// left of centre so the gun shows lower right instead of covering the
-// crosshair; higher for the pistol, which is held up at eye level.
-const VIEW_EYE = {
-  rifle: [-0.14, -0.04, 0.18],
-  pistol: [-0.13, 0.05, 0.12],
-};
 // Horizon: the haze colour (fog and the bottom of the sky), the sky
 // overhead, the fog distances, the ground beyond the map, the skyline.
 const HORIZON = 0xc9dcec;
@@ -24,10 +16,6 @@ const OUTER_GROUND = 0x45484d;
 const SKYLINE = 0x7d8796; // the nearest towers' colour (bluish grey)
 const _up = new THREE.Vector3(0, 1, 0);
 
-const _eyePoint = new THREE.Vector3();
-const _offset = new THREE.Vector3();
-const _shift = new THREE.Vector3();
-const _euler = new THREE.Euler();
 
 export class Renderer {
   constructor(canvas) {
@@ -49,7 +37,7 @@ export class Renderer {
     // unlit (see setMap); the sun here points the same way as the baked sun
     // (tools/export_map.py).
     const addLights = (scene) => {
-      scene.add(new THREE.HemisphereLight(0xeaf3ff, 0x8a7a66, 2.0));
+      scene.add(new THREE.HemisphereLight(0xeaf3ff, 0x9a8a76, 2.5)); // (bright fill: characters match the bright painted map)
       const sun = new THREE.DirectionalLight(0xffe6c4, 2.6);
       sun.position.set(30, 50, 20);
       scene.add(sun);
@@ -166,7 +154,10 @@ export class Renderer {
 
   // state: { pos, yaw, pitch, dead }
   updateAvatar(id, name, skin, team, state, dt) {
-    this.ensureAvatar(id, name, skin, team).update(dt, state);
+    const avatar = this.ensureAvatar(id, name, skin, team);
+    avatar.update(dt, state);
+    // For the hitboxes (shared.js headCenter): as drawn.
+    avatar.pose = { yaw: state.yaw, pitch: state.pitch, weapon: state.weapon, vel: state.vel, skin };
   }
 
   removeAvatar(id) {
@@ -215,15 +206,7 @@ export class Renderer {
     view.update(dt, state);
     view.shadow.visible = false;
     view.label.visible = false;
-    // Shift the whole body so its eyes (just above and in front of the head
-    // bone, turned with the view) sit exactly at the camera.
-    view.bones.head.getWorldPosition(_eyePoint);
-    const k = view.pistolBlend;
-    const [side, up, forward] = VIEW_EYE.rifle.map((r, i) => r + (VIEW_EYE.pistol[i] - r) * k);
-    _offset.set(side, up, -forward).applyEuler(_euler.set(state.pitch, state.yaw, 0, 'YXZ'));
-    _eyePoint.add(_offset);
-    view.object.position.add(_shift.set(...state.eye).sub(_eyePoint));
-    view.object.updateMatrixWorld(true);
+    view.placeEyes(state.eye, state.yaw, state.pitch);
   }
 
   // ---- horizon -----------------------------------------------------------
@@ -322,7 +305,7 @@ export class Renderer {
       if (!avatar.xrayMeshes) {
         avatar.xrayMeshes = [];
         avatar.model.traverse((o) => { if (o.isSkinnedMesh) avatar.xrayMeshes.push(o); });
-        avatar.hitboxes = [0, 1].map(() => {
+        avatar.hitboxes = [0, 1, 2].map(() => {
           const box = new THREE.LineSegments(this.hitboxGeometry, this.hitboxMaterials[avatar.team] ?? this.hitboxMaterials[0]);
           box.frustumCulled = false;
           this.xrayScene.add(box);
@@ -337,7 +320,7 @@ export class Renderer {
       }
       // Head and body boxes, as the host hit-tests them.
       const pos = avatar.object.position.toArray();
-      [headAABB(pos), bodyAABB(pos)].forEach((b, i) => {
+      [headAABB(pos, avatar.pose), ...bodyAABBs(pos, avatar.pose)].forEach((b, i) => {
         const box = avatar.hitboxes[i];
         box.visible = layer > 0;
         box.position.set(...b.min.map((v, k) => (v + b.max[k]) / 2));

@@ -67,9 +67,15 @@
       <div id="buyMoney"></div>
       <div class="buyCols">
         <div><h3>Weapon</h3><div id="buyList" role="radiogroup"></div></div>
-        <div><h3>Hack</h3><div id="buyHacks" role="radiogroup"></div></div>
+        <div><h3>Hacks <small>(any number)</small></h3><div id="buyHacks" role="group"></div></div>
       </div>
       <div id="buyTotal"></div>
+      <label id="botRow" hidden>Bots (AI players): fill teams to
+        <select id="botFill">
+          <option value="0">Off</option><option value="1">1 vs 1</option><option value="2">2 vs 2</option>
+          <option value="3">3 vs 3</option><option value="4">4 vs 4</option>
+        </select>
+      </label>
       <button id="buyStart">Start</button>
       <p class="help">WASD move · Space jump · Mouse aim · Click shoot · R reload · M mute · Tab scores · Esc release mouse</p>
     </div>

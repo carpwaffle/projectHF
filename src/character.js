@@ -36,6 +36,8 @@ import { makeMuzzleFlash } from './effects.js';
 
 const LOCOMOTION = ['run_forward', 'run_backward', 'strafe_left', 'strafe_right'];
 const RUN_ANIM_SPEED = 5; // m/s at which the run clips play at normal speed
+const SPEED_FALL = 25; // m/s per second: how fast the animation speed may drop (see speedHold)
+const AIR_DELAY = 0.1; // seconds above the ground before the jump clip starts
 
 // Upper-body bones (three.js strips the dots: "UpperArm.L" -> "UpperArmL").
 const UPPER_BODY = /^(Abdomen|Torso|Neck|Head|Shoulder|UpperArm|LowerArm|Palm|Fingers|Thumb)/;
@@ -85,7 +87,7 @@ const GUNS = {
   sniper: {
     set: 'rifle',
     rightGrip: RIFLE_GRIP,
-    leftGrip: V(0, -0.025, -0.27), // under the forend
+    leftGrip: V(0, -0.025, -0.23), // under the forend (close enough for a bent elbow, like the rifle's)
     muzzle: V(0, 0.03, -0.8),
     magGrab: V(-0.03, -0.035, -0.085), // where the left hand takes the magazine (left of it)
     boltAxis: V(0.002, 0.042, 0), // the bolt turns about the bore through here
@@ -156,7 +158,7 @@ const GUNS = {
   shotgun: {
     set: 'rifle',
     rightGrip: RIFLE_GRIP,
-    leftGrip: V(0, -0.012, -0.3), // under the pump
+    leftGrip: V(0, -0.012, -0.24), // under the pump (its back half: close enough for a bent elbow)
     muzzle: V(0, 0.045, -0.64),
     magGrab: V(-0.011, 0.037, -0.1), // a shell (the Bullet bone), shown in the hand while loading
     extra: { port: V(-0.01, -0.035, -0.11) }, // loading port under the receiver
@@ -209,6 +211,18 @@ const WRIST_TWIST_TO_FOREARM = 0.5; // share of the left wrist's twist moved int
 
 const { damp, clamp } = THREE.MathUtils;
 const gripRest = {};
+// First person: where the camera sits relative to the head bone (metres,
+// view-aligned: side, up, forward), per holding style, blended when
+// switching. A little left of centre so the gun shows lower right instead of
+// covering the crosshair; higher for the pistol, which is held up at eye level.
+const VIEW_EYE = {
+  rifle: [-0.14, -0.04, 0.18],
+  pistol: [-0.13, 0.05, 0.12],
+};
+const _eyePoint = new THREE.Vector3();
+const _eyeOffset = new THREE.Vector3();
+const _eyeEuler = new THREE.Euler();
+
 const gripOffsets = {}; // gender -> set -> Matrix4, hand space -> gun space
 // gender -> set -> { grip, shoulder, chest, chestYaw }: in the set's idle pose,
 // where the gun's grip, the right shoulder and the chest are, and which way
@@ -292,6 +306,8 @@ export class Character {
     this.onSound = null; // (name, intensity) => void
     this.airborne = false;
     this.fallSpeed = 0;
+    this.speedHold = 0; // speed for the animations: rises at once, falls over ~0.25 s
+    this.offGround = 0; // seconds clearly above the ground
 
     this.object = new THREE.Group(); // feet position, rotated by yaw; faces -Z
     this.model = cloneSkinned(assets.characters[skinName]);
@@ -375,6 +391,33 @@ export class Character {
     this.object.add(this.shield);
   }
 
+  // Keep the left arm from stretching straight: a straight arm can't bend
+  // smoothly (the elbow snaps between bent and locked as the shoulder moves
+  // with the run cycle). If the target is further from the shoulder than
+  // LEFT_REACH of the arm's length, the hand slides back along the gun
+  // (toward the body) until it isn't, up to LEFT_SLIDE. Beyond that (aiming
+  // steeply up while running back), the target is softly pulled in toward
+  // the shoulder, so the arm still never locks straight (the hand comes a
+  // little off the gun instead). Moves `target`.
+  withinReach(upper, lower, hand, target) {
+    const S = upper.getWorldPosition(_s);
+    const length = S.distanceTo(lower.getWorldPosition(_e)) + _e.distanceTo(hand.getWorldPosition(_w));
+    const reach = LEFT_REACH * length;
+    const d = _t2.subVectors(target, S);
+    if (d.lengthSq() <= reach * reach) return;
+    const back = _axis.set(0, 0, 1).applyQuaternion(this.gun.getWorldQuaternion(_hq)); // toward the stock
+    // Smallest t with |d + t * back| = reach (or the closest the gun line comes).
+    const b = d.dot(back);
+    const disc = b * b - d.lengthSq() + reach * reach;
+    const t = disc > 0 ? -b - Math.sqrt(disc) : -b;
+    target.addScaledVector(back, clamp(t, 0, LEFT_SLIDE));
+    // Soft limit: distances past `reach` approach (but never get to) LEFT_MAX.
+    const dist = d.subVectors(target, S).length();
+    if (dist <= reach) return;
+    const room = (LEFT_MAX - LEFT_REACH) * length;
+    target.copy(S).addScaledVector(d, (reach + room * Math.tanh((dist - reach) / room)) / dist);
+  }
+
   // Swap the gun in the hand (weapon id from WEAPONS); it sits in the hand
   // the way its animation set holds it.
   setWeapon(id) {
@@ -412,11 +455,20 @@ export class Character {
     const gunWorld = new THREE.Matrix4().makeTranslation(centre.sub(grip)); // facing -Z, upright
     gripOffsets[this.gender][set] = hand.matrixWorld.clone().invert().multiply(gunWorld);
     gripRest[this.gender] ??= {};
+    // The idle's wrists are the natural ones: how each forearm runs into its
+    // hand (the forearm's direction in the hand's space), and how the left
+    // hand is turned on the gun (in the gun's space: the gun faces -Z,
+    // upright, like the character here).
+    const forearm = (lower, hand) => new THREE.Vector3().subVectors(hand.getWorldPosition(new THREE.Vector3()), lower.getWorldPosition(new THREE.Vector3()))
+      .normalize().applyQuaternion(hand.getWorldQuaternion(new THREE.Quaternion()).invert());
     gripRest[this.gender][set] = {
       grip: this.object.worldToLocal(centre.add(grip)),
       shoulder: this.object.worldToLocal(this.bones.rightUpper.getWorldPosition(new THREE.Vector3())),
       chest: this.object.worldToLocal(this.bones.torso.getWorldPosition(new THREE.Vector3())),
       chestYaw: this.chestYaw(),
+      forearmR: forearm(this.bones.rightLower, this.bones.rightHand),
+      forearmL: forearm(this.bones.leftLower, this.bones.leftHand),
+      leftInGun: this.bones.leftHand.getWorldQuaternion(new THREE.Quaternion()),
     };
   }
 
@@ -474,6 +526,18 @@ export class Character {
   }
 
   // World position of the rifle's muzzle (where tracers start).
+  // First person: shift the whole body so its eyes (just above and in front
+  // of the head bone, turned with the view) sit exactly at the camera (eye).
+  // After update().
+  placeEyes(eye, yaw, pitch) {
+    this.bones.head.getWorldPosition(_eyePoint);
+    const k = this.pistolBlend;
+    const [side, up, forward] = VIEW_EYE.rifle.map((r, i) => r + (VIEW_EYE.pistol[i] - r) * k);
+    _eyePoint.add(_eyeOffset.set(side, up, -forward).applyEuler(_eyeEuler.set(pitch, yaw, 0, 'YXZ')));
+    this.object.position.add(_eyeOffset.set(...eye).sub(_eyePoint));
+    this.object.updateMatrixWorld(true);
+  }
+
   muzzleWorld(target = new THREE.Vector3()) {
     return this.gun.localToWorld(target.copy(this.gun.userData.points.muzzle));
   }
@@ -502,18 +566,19 @@ export class Character {
     const now = performance.now();
 
     // ---- velocity ----------------------------------------------------------
-    if (state.vel) {
-      this.velocity.set(...state.vel);
+    // state.vel if given (remote players: from the snapshots, steadier than
+    // frame-to-frame position changes), else from the position; smoothed.
+    const k = 1 - Math.exp(-15 * dt);
+    if (this.lastPos && Math.hypot(...[0, 1, 2].map((i) => pos[i] - this.lastPos[i])) > 3) {
+      this.velocity.set(0, 0, 0); // teleport (respawn)
+    } else if (state.vel) {
+      this.velocity.x += (state.vel[0] - this.velocity.x) * k;
+      this.velocity.y += (state.vel[1] - this.velocity.y) * k;
+      this.velocity.z += (state.vel[2] - this.velocity.z) * k;
     } else if (this.lastPos) {
-      const d = [0, 1, 2].map((i) => pos[i] - this.lastPos[i]);
-      if (Math.hypot(...d) > 3) {
-        this.velocity.set(0, 0, 0); // teleport (respawn)
-      } else {
-        const k = 1 - Math.exp(-15 * dt);
-        this.velocity.x += (d[0] / dt - this.velocity.x) * k;
-        this.velocity.y += (d[1] / dt - this.velocity.y) * k;
-        this.velocity.z += (d[2] / dt - this.velocity.z) * k;
-      }
+      this.velocity.x += ((pos[0] - this.lastPos[0]) / dt - this.velocity.x) * k;
+      this.velocity.y += ((pos[1] - this.lastPos[1]) / dt - this.velocity.y) * k;
+      this.velocity.z += ((pos[2] - this.lastPos[2]) / dt - this.velocity.z) * k;
     }
     this.lastPos = [...pos];
     this.object.position.set(pos[0], pos[1], pos[2]);
@@ -540,15 +605,34 @@ export class Character {
     const v = this.velocity;
     const fwd = -v.x * sin - v.z * cos;
     const right = v.x * cos - v.z * sin;
-    const speed = Math.hypot(fwd, right);
+    // Brief stops (a network hiccup, a bot pausing for a moment) shouldn't
+    // flash the idle pose between runs: the speed the clips see falls slowly.
+    const actual = Math.hypot(fwd, right);
+    this.speedHold = Math.max(actual, this.speedHold - SPEED_FALL * dt);
+    const speed = this.speedHold;
     const alive = this.dead ? 0 : 1;
 
     this.move = damp(this.move, clamp(speed / 2, 0, 1) * alive, 10, dt);
-    if (speed > 0.5) {
-      this.dirF = damp(this.dirF, fwd / speed, 10, dt);
-      this.dirS = damp(this.dirS, right / speed, 10, dt);
+    if (actual > 0.5) { // (the direction: only while really moving)
+      this.dirF = damp(this.dirF, fwd / actual, 10, dt);
+      this.dirS = damp(this.dirS, right / actual, 10, dt);
     }
-    this.air = damp(this.air, Math.abs(v.y) > 1.2 && alive ? 1 : 0, 10, dt);
+    // Airborne = clearly above the surface below (state.ground; without it,
+    // judged from vertical speed). Not from vertical speed alone: going up or
+    // down stairs is ~4 m/s vertically, which flickered the jump clip in and out.
+    // Only after AIR_DELAY up (or clearly high): small drops off kerbs and
+    // steps don't flash the jump pose.
+    const above = state.ground === undefined ? (Math.abs(v.y) > 2.5 ? 1 : 0) : pos[1] - state.ground;
+    this.offGround = above > 0.3 ? this.offGround + dt : 0;
+    if (!this.dead && (this.offGround > AIR_DELAY || above > 0.8)) {
+      this.airborne = true;
+      this.fallSpeed = Math.max(this.fallSpeed, -v.y);
+    } else if (this.airborne && above < 0.08) {
+      this.airborne = false;
+      if (!this.dead && this.fallSpeed > 2) this.onSound?.('land', clamp(this.fallSpeed / 9, 0.5, 1.5));
+      this.fallSpeed = 0;
+    }
+    this.air = damp(this.air, this.airborne && alive ? 1 : 0, 10, dt);
     this.recoil = damp(this.recoil, 0, 16, dt);
     this.gun.userData.flash.userData.update(dt);
 
@@ -598,18 +682,7 @@ export class Character {
       this.phase = (this.phase + (dt / cycle) * clamp(speed / RUN_ANIM_SPEED, 0.6, 1.6)) % 1;
     }
 
-    // ---- sounds: landings and footsteps -------------------------------------
-    // Airborne = clearly above the surface below (state.ground; without it,
-    // judged from vertical speed).
-    const above = state.ground === undefined ? (Math.abs(v.y) > 2.5 ? 1 : 0) : pos[1] - state.ground;
-    if (!this.dead && above > 0.3) {
-      this.airborne = true;
-      this.fallSpeed = Math.max(this.fallSpeed, -v.y);
-    } else if (this.airborne && above < 0.08) {
-      this.airborne = false;
-      if (!this.dead && this.fallSpeed > 2) this.onSound?.('land', clamp(this.fallSpeed / 9, 0.5, 1.5));
-      this.fallSpeed = 0;
-    }
+    // ---- sounds: footsteps (landings: see airborne above) --------------------
     // A foot lands twice per run cycle (phase 0 and 0.5).
     const stepped = this.phase < lastPhase || (lastPhase < 0.5 && this.phase >= 0.5);
     if (stepped && !this.airborne && !this.dead && this.move > 0.3 && weightSum > 0.001) {
@@ -640,7 +713,7 @@ export class Character {
     this.gun.rotation.set(0, 0, 0);
     // (Neither while the rifle's reload clip moves the rifle in the hand.)
     const clipReload = this.weaponId === 'rifle' ? this.reloadBlend : 0;
-    this.holdGun((state.pitch + this.recoil * 0.08) * living, chestYaw, living * (1 - clipReload));
+    this.holdGun(state.yaw, (state.pitch + this.recoil * 0.08) * living, chestYaw, living * (1 - clipReload));
     this.gun.updateMatrixWorld(true);
     // Guns with a procedural reload: gun tilt, bolt / slide; null otherwise.
     const proc = this.gun.userData.points.reload ? this.poseGun(now) : null;
@@ -650,16 +723,33 @@ export class Character {
     // ---- left hand IK onto the gun (rifle: blended out while the reload clip
     // moves the hand; blending instead of switching, so the hand doesn't jump
     // when the reload ends). Procedural reloads: onto the reload path.
+    // On the gun (blended out while a procedural reload moves the hand), the
+    // hand is also turned the way the idle holds it on the gun, with the
+    // elbow swung round to keep the wrist as straight as there.
     const ik = living > 0.5 ? (proc ? 1 : 1 - this.reloadBlend) : 0;
+    const onGun = !proc || proc.progress < 0 || proc.progress >= this.gun.userData.points.reload.path.at(-1)[0];
+    this.leftLock = damp(this.leftLock ?? 1, onGun ? 1 : 0, 10, dt);
     if (ik > 0.001) {
-      const { leftUpper: upper, leftLower: lower } = this.bones;
+      const { leftUpper: upper, leftLower: lower, leftHand: hand } = this.bones;
       _upperQ.copy(upper.quaternion);
       _lowerQ.copy(lower.quaternion);
+      _handQ.copy(hand.quaternion);
       const target = proc ? this.handTarget(proc.progress) : this.gun.localToWorld(this.gun.userData.points.leftGrip.clone());
-      solveTwoBone(upper, lower, this.bones.leftHand, target);
+      this.withinReach(upper, lower, hand, target);
+      solveTwoBone(upper, lower, hand, target);
+      if (this.leftLock > 0.001) {
+        const rest = gripRest[this.gender];
+        _wantQ.slerpQuaternions(rest.rifle.leftInGun, rest.pistol.leftInGun, this.pistolBlend)
+          .premultiply(this.gun.getWorldQuaternion(_hq));
+        const forearm = _v.lerpVectors(rest.rifle.forearmL, rest.pistol.forearmL, this.pistolBlend).normalize().applyQuaternion(_wantQ);
+        swivelElbow(upper, lower, hand, forearm, ELBOW_SWIVEL * this.leftLock);
+        hand.getWorldQuaternion(_hq);
+        setBoneWorldQuaternion(hand, _hq.slerp(_wantQ, this.leftLock));
+      }
       if (ik < 0.999) {
         upper.quaternion.copy(_upperQ.slerp(upper.quaternion, ik));
         lower.quaternion.copy(_lowerQ.slerp(lower.quaternion, ik));
+        hand.quaternion.copy(_handQ.slerp(hand.quaternion, ik));
         upper.updateMatrixWorld(true);
       }
     }
@@ -695,8 +785,12 @@ export class Character {
   // running backward, off to the left with the pistol aim over running);
   // following the chest keeps the gun in the same place on the body: its
   // position fully, its twist half (fully, the arms swing side to side).
+  // The hand itself turns with the aim (yaw, pitch), so the gun sits in it
+  // the same way as in the idle, and the elbow swings round to where the
+  // wrist stays as straight as in the idle (rather than the gun turning in
+  // a hand still posed by the clip: that looked like a broken wrist).
   // weight: 0..1.
-  holdGun(pitch, chestYaw, weight) {
+  holdGun(yaw, pitch, chestYaw, weight) {
     if (weight < 0.001) return;
     const rest = gripRest[this.gender];
     const k = this.pistolBlend;
@@ -711,15 +805,22 @@ export class Character {
     const { rightUpper: upper, rightLower: lower, rightHand: hand } = this.bones;
     _upperQ.copy(upper.quaternion);
     _lowerQ.copy(lower.quaternion);
+    _handQ.copy(hand.quaternion);
+    // The hand's turn: the gun (unturned in its holder) along the aim.
+    _aimQ.setFromEuler(_euler.set(pitch, yaw, 0, 'YXZ'));
+    _wantQ.copy(_aimQ).multiply(_holderQ.copy(this.rifleHolder.quaternion).invert());
+    // The grip's offset from the palm, turned with the hand: palm = target - offset.
     const grip = this.gun.userData.points.rightGrip;
-    for (let i = 0; i < 2; i++) { // (the grip is off the palm bone; a second pass settles it)
-      this.rifleHolder.localToWorld(_v.copy(grip));
-      hand.getWorldPosition(_hp);
-      solveTwoBone(upper, lower, hand, _hp.sub(_v).add(_target)); // palm = target - (grip - palm)
-    }
+    this.rifleHolder.localToWorld(_v.copy(grip)).sub(hand.getWorldPosition(_hp))
+      .applyQuaternion(hand.getWorldQuaternion(_hq).invert()).applyQuaternion(_wantQ);
+    solveTwoBone(upper, lower, hand, _hp.copy(_target).sub(_v));
+    const forearm = _v.lerpVectors(rest.rifle.forearmR, rest.pistol.forearmR, k).normalize().applyQuaternion(_wantQ);
+    swivelElbow(upper, lower, hand, forearm, ELBOW_SWIVEL);
+    setBoneWorldQuaternion(hand, _wantQ);
     if (weight < 0.999) {
       upper.quaternion.copy(_upperQ.slerp(upper.quaternion, weight));
       lower.quaternion.copy(_lowerQ.slerp(lower.quaternion, weight));
+      hand.quaternion.copy(_handQ.slerp(hand.quaternion, weight));
       upper.updateMatrixWorld(true);
     }
   }
@@ -940,6 +1041,16 @@ const _pivot = new THREE.Vector3();
 const _xAxis = new THREE.Vector3(1, 0, 0);
 const _yAxis = new THREE.Vector3(0, 1, 0);
 const CHEST_TWIST_FOLLOW = 0.5;
+const LEFT_REACH = 0.94; // most of the left arm's length the hand may need (the rifle's idle: 0.94)
+const LEFT_SLIDE = 0.2; // metres the left hand may slide back along the gun to stay within reach
+const LEFT_MAX = 0.985; // ... and past that, the arm's softly limited stretch (still a little bent)
+const _t2 = new THREE.Vector3();
+const ELBOW_SWIVEL = 1.2; // radians the elbow may swing round from the clip's (keeping the wrist natural)
+const _handQ = new THREE.Quaternion();
+const _wantQ = new THREE.Quaternion();
+const _e = new THREE.Vector3();
+const _s = new THREE.Vector3();
+const _w = new THREE.Vector3();
 const _upperQ = new THREE.Quaternion();
 const _lowerQ = new THREE.Quaternion();
 const _axis = new THREE.Vector3();
@@ -982,6 +1093,33 @@ function relaxWristTwist(lower, hand, amount) {
   lower.quaternion.multiply(_part);
   hand.quaternion.premultiply(_part.invert());
   lower.updateMatrixWorld(true);
+}
+
+// Give a bone this world rotation.
+function setBoneWorldQuaternion(bone, q) {
+  bone.parent.getWorldQuaternion(_pq);
+  bone.quaternion.copy(_pq.invert().multiply(q));
+  bone.updateMatrixWorld(true);
+}
+
+// Swing the arm round the shoulder-wrist line (the hand stays where it is)
+// so the forearm runs as close as it can to `dir` (world, unit, elbow to
+// wrist), by at most maxAngle.
+function swivelElbow(upper, lower, hand, dir, maxAngle) {
+  const S = upper.getWorldPosition(_s);
+  const E = lower.getWorldPosition(_e);
+  const H = hand.getWorldPosition(_w);
+  const axis = _axis.subVectors(H, S);
+  if (axis.lengthSq() < 1e-8) return;
+  axis.normalize();
+  const want = _t.copy(H).addScaledVector(dir, -E.distanceTo(H)).sub(S); // where the elbow would be
+  const cur = E.sub(S);
+  want.addScaledVector(axis, -want.dot(axis)); // (both across the axis)
+  cur.addScaledVector(axis, -cur.dot(axis));
+  if (want.lengthSq() < 1e-8 || cur.lengthSq() < 1e-8) return;
+  let angle = cur.angleTo(want);
+  if (_c.crossVectors(cur, want).dot(axis) < 0) angle = -angle;
+  rotateBoneByWorldQuat(upper, _q.setFromAxisAngle(axis, clamp(angle, -maxAngle, maxAngle)));
 }
 
 function solveTwoBone(upper, lower, end, target) {

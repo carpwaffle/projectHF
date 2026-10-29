@@ -7,6 +7,8 @@
   <style>
     html, body { margin: 0; height: 100%; overflow: hidden; background: #8fb8de; font-family: system-ui, sans-serif; }
     canvas { display: block; width: 100vw; height: 100vh; cursor: grab; }
+    #crosshair { position: fixed; left: 50%; top: 50%; width: 4px; height: 4px; margin: -2px; background: #fff; border-radius: 50%; box-shadow: 0 0 2px #000; pointer-events: none; }
+    #crosshair[hidden] { display: none; }
     #panel { position: fixed; top: 12px; left: 12px; display: flex; flex-direction: column; gap: 8px; padding: 12px;
       background: rgba(13, 15, 18, 0.85); color: #fff; border-radius: 8px; width: 220px; font-size: 13px; }
     #panel h2 { margin: 0; font-size: 14px; letter-spacing: 1px; }
@@ -27,6 +29,7 @@
 </head>
 <body>
   <canvas id="view"></canvas>
+  <div id="crosshair" hidden></div>
   <div id="panel">
     <h2>CHARACTER PREVIEW</h2>
     <div class="grid" style="grid-template-columns: auto 1fr auto; align-items: center;">
@@ -34,16 +37,20 @@
       <span id="skinName" style="text-align: center;">Loading…</span>
       <button id="nextSkin">▶</button>
     </div>
+    <div class="grid" id="views"></div>
+    <div class="grid" id="weapons"></div>
     <div class="grid" id="moves"></div>
     <div class="grid">
       <button id="jump">Jump</button>
       <button id="fire">Auto-fire</button>
+      <button id="reload">Reload</button>
       <button id="die">Die</button>
       <button id="spin">Turntable</button>
+      <button id="boxes">Hitboxes</button>
     </div>
     <label>Aim pitch <input id="pitch" type="range" min="-1.4" max="1.4" step="0.01" value="0" /></label>
     <label>Speed <input id="speed" type="range" min="0.2" max="1" step="0.01" value="1" /></label>
-    <span class="hint">Drag to orbit · scroll to zoom</span>
+    <span class="hint" id="hint"></span>
   </div>
   <script type="module" src="src/preview.js"></script>
 </body>

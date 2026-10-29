@@ -20,6 +20,12 @@ export const TEAMS = [
 ];
 
 export const MAX_HP = 200;
+// Clients send a heartbeat every second (also from the buy menu); the host
+// drops players it hasn't heard from for PLAYER_TIMEOUT seconds (closed tab,
+// crash, lost connection: WebRTC doesn't always report those), and clients
+// leave when the host has been silent for HOST_TIMEOUT.
+export const PLAYER_TIMEOUT = 6;
+export const HOST_TIMEOUT = 8;
 export const SPAWN_PROTECTION = 3; // seconds of invulnerability after spawning (ends early when you fire)
 
 // Weapons (index = the number sent over the network, and key 1-6). Every
@@ -81,14 +87,14 @@ export const weaponIndex = (id) => WEAPONS.findIndex((w) => w.id === id);
 // Money: earned on every death (SURVIVAL_RATE per second alive) and kill
 // (KILL_REWARD); spent on the weapon you spawn with (WEAPONS[].price). Everyone
 // starts with $0. The host keeps the accounts.
-export const SURVIVAL_RATE = 4; // dollars per second alive
-export const KILL_REWARD = 250;
+export const SURVIVAL_RATE = 8; // dollars per second alive
+export const KILL_REWARD = 500;
 
-// Hacks: bought in the buy menu like weapons (separately: you pay for both),
-// one at a time, active until your next death. Index = the number sent over
-// the network.
+// Hacks: bought in the buy menu like weapons (separately: you pay for the
+// weapon and each hack), any number at once, active until your next death.
+// A player's hacks are a bit mask (bit i: HACKS[i]), the number sent over
+// the network; 0 = none.
 export const HACKS = [
-  { id: 'none', name: 'No hack', price: 0, desc: '' },
   { id: 'map', name: 'Map hack', price: 300, desc: 'Minimap: every player and pickup timer' },
   { id: 'speed', name: 'Speed hack', price: 400, desc: 'Move 3x faster' },
   { id: 'recoil', name: 'Recoil hack', price: 400, desc: '85% less spread' },
@@ -100,10 +106,13 @@ export const HACKS = [
   { id: 'aim', name: 'Aim hack', price: 900, desc: 'Hold Shift: lock onto a visible head' },
   { id: 'victory', name: 'Victory hack', price: 10000, desc: 'Your team wins the round' },
 ];
-export const hackIndex = (id) => HACKS.findIndex((h) => h.id === id);
-export const hackId = (index) => HACKS[index]?.id ?? 'none';
+export const ALL_HACKS = (1 << HACKS.length) - 1; // (every bit in use)
+export const hackBit = (id) => 1 << HACKS.findIndex((h) => h.id === id);
+export const hasHack = (mask, id) => (mask & hackBit(id)) !== 0;
+export const hackList = (mask) => HACKS.filter((_, i) => mask & (1 << i));
+export const hacksPrice = (mask) => hackList(mask).reduce((sum, h) => sum + h.price, 0);
 export const SPEED_HACK = 3.0; // movement speed multiplier
-export const FLY_HACK_SPEED = 1.3; // ... while flying with the fly hack
+export const FLY_HACK_SPEED = 1.3; // ... while flying with the fly hack (without the speed hack)
 export const RECOIL_HACK = 0.15; // spread multiplier (85% less)
 export const FLY_SPEED = 6; // m/s up / down with the fly hack
 export const FLY_MAX_Y = 25; // fly ceiling (House08's roof is at 15 m)
@@ -112,9 +121,9 @@ export const HEAL_AMOUNT = 100; // a heal pack heals this much (up to max HP)
 export const FAST_CYCLE = 0.5; // infinite ammo: shotgun pump / sniper bolt time multiplier
 export const VICTORY_SCREEN = 10; // seconds the winning team is shown before the next round
 
-// Seconds between shots for a weapon, with the player's hack.
-export function fireCooldown(weapon, hack) {
-  const fast = hackId(hack) === 'ammo' && (weapon.id === 'shotgun' || weapon.id === 'sniper');
+// Seconds between shots for a weapon, with the player's hacks (mask).
+export function fireCooldown(weapon, hacks) {
+  const fast = hasHack(hacks, 'ammo') && (weapon.id === 'shotgun' || weapon.id === 'sniper');
   return weapon.cooldown * (fast ? FAST_CYCLE : 1);
 }
 
@@ -222,28 +231,83 @@ export function normalize(v) {
   return v.map((x) => x / l);
 }
 
-// Hitboxes for shooting (feet at pos): the head on top of the body.
-const HEAD_BOTTOM = 1.45;
-const HEAD_HALF = 0.16;
-export function headAABB(pos) {
-  return {
-    min: [pos[0] - HEAD_HALF, pos[1] + HEAD_BOTTOM, pos[2] - HEAD_HALF],
-    max: [pos[0] + HEAD_HALF, pos[1] + PLAYER_HEIGHT + 0.02, pos[2] + HEAD_HALF],
-  };
+// Hitboxes for shooting (feet at pos): the legs (a box round the player),
+// the chest (leaning with the upper body: halfway from the hips to the
+// head) and the head: a box round where the character's head is drawn, which is
+// rarely straight over the feet. The aiming animations lean into the gun:
+// the head swings forward and down with the aim pitch (about a pivot near
+// the hips), sits to the right with the long guns (cheek on the stock), and
+// leans with the movement. Measured from the animations in the preview
+// (within ~3 cm over the whole pitch range).
+// pose: { yaw, pitch, weapon (index into WEAPONS), vel:[x,y,z], skin };
+// without it, the head is straight above the feet.
+const HEAD_BOTTOM = 1.45; // (chest box top)
+const CHEST_BOTTOM = 0.95; // (legs box top)
+const HEAD_HALF = [0.15, 0.18]; // across, up (the head: ~0.23 x 0.29 x 0.24 m, plus ~4 cm for the run cycle's bob)
+const HEAD_PIVOT = [-0.02, 0.92]; // forward, up
+const HEAD_ARM = 0.71; // pivot to the head's centre
+const HEAD_TILT = 0.3; // radians forward of upright when aiming level
+const HEAD_PITCH_FOLLOW = 0.46; // how much of the aim pitch the body bends
+const FEMALE_SKIN = 4; // skins from here on are the female model (assets.js SKINS)...
+const FEMALE_SCALE = 0.955; // ... about this size of the male one
+const PISTOL_HOLD = new Set(['pistol', 'revolver']); // held up in both hands (the others: at the shoulder)
+// Per holding style: the head's sideways offset, and its shift when moving
+// at full speed in each direction ([right, up, forward]).
+const HEAD_STYLE = {
+  rifle: { side: 0.14, fwd: [-0.06, -0.08, 0.15], back: [-0.07, -0.02, -0.15], left: [-0.12, -0.01, -0.02], right: [0.17, -0.08, -0.08] },
+  pistol: { side: 0, fwd: [0.02, -0.03, 0.11], back: [0.07, -0.06, 0.14], left: [0, -0.08, 0.08], right: [0.01, -0.08, 0.02] },
+};
+export function headCenter(pos, pose) {
+  if (!pose) return [pos[0], pos[1] + (HEAD_BOTTOM + PLAYER_HEIGHT) / 2, pos[2]];
+  const style = HEAD_STYLE[PISTOL_HOLD.has(WEAPONS[pose.weapon]?.id) ? 'pistol' : 'rifle'];
+  const angle = HEAD_TILT - HEAD_PITCH_FOLLOW * (pose.pitch ?? 0);
+  let right = style.side;
+  let up = HEAD_PIVOT[1] + HEAD_ARM * Math.cos(angle);
+  let forward = HEAD_PIVOT[0] + HEAD_ARM * Math.sin(angle);
+  const sin = Math.sin(pose.yaw ?? 0);
+  const cos = Math.cos(pose.yaw ?? 0);
+  if (pose.vel) {
+    // Movement in the player's frame, as fractions of full speed.
+    let f = (-sin * pose.vel[0] - cos * pose.vel[2]) / MOVE_SPEED;
+    let r = (cos * pose.vel[0] - sin * pose.vel[2]) / MOVE_SPEED;
+    const len = Math.hypot(f, r);
+    if (len > 1) { f /= len; r /= len; }
+    for (const [k, lean] of [[Math.max(f, 0), style.fwd], [Math.max(-f, 0), style.back], [Math.max(r, 0), style.right], [Math.max(-r, 0), style.left]]) {
+      right += lean[0] * k;
+      up += lean[1] * k;
+      forward += lean[2] * k;
+    }
+  }
+  const scale = pose.skin >= FEMALE_SKIN ? FEMALE_SCALE : 1;
+  right *= scale;
+  up *= scale;
+  forward *= scale;
+  // Player frame (facing -Z at yaw 0, +X to the right) to the world.
+  return [pos[0] + cos * right - sin * forward, pos[1] + up, pos[2] - sin * right - cos * forward];
 }
-export function bodyAABB(pos) {
-  return {
-    min: [pos[0] - PLAYER_RADIUS, pos[1], pos[2] - PLAYER_RADIUS],
-    max: [pos[0] + PLAYER_RADIUS, pos[1] + HEAD_BOTTOM, pos[2] + PLAYER_RADIUS],
-  };
+export function headAABB(pos, pose) {
+  const c = headCenter(pos, pose);
+  const [a, h] = HEAD_HALF;
+  return { min: [c[0] - a, c[1] - h, c[2] - a], max: [c[0] + a, c[1] + h, c[2] + a] };
+}
+// The body: [legs, chest].
+export function bodyAABBs(pos, pose) {
+  const head = headCenter(pos, pose);
+  const x = (pos[0] + head[0]) / 2;
+  const z = (pos[2] + head[2]) / 2;
+  const r = PLAYER_RADIUS;
+  return [
+    { min: [pos[0] - r, pos[1], pos[2] - r], max: [pos[0] + r, pos[1] + CHEST_BOTTOM, pos[2] + r] },
+    { min: [x - r, pos[1] + CHEST_BOTTOM, z - r], max: [x + r, pos[1] + HEAD_BOTTOM, z + r] },
+  ];
 }
 
-// Whole-player box (feet at pos), for where a tracer stops.
-export function playerAABB(pos) {
-  return {
-    min: [pos[0] - PLAYER_RADIUS, pos[1], pos[2] - PLAYER_RADIUS],
-    max: [pos[0] + PLAYER_RADIUS, pos[1] + PLAYER_HEIGHT, pos[2] + PLAYER_RADIUS],
-  };
+// Where a ray first hits a player (head or body; Infinity on a miss).
+export function rayPlayer(o, d, pos, pose) {
+  const head = headAABB(pos, pose);
+  const th = rayAABB(o, d, head.min, head.max);
+  const tb = Math.min(...bodyAABBs(pos, pose).map((b) => rayAABB(o, d, b.min, b.max)));
+  return { t: Math.min(th, tb), headshot: th < Infinity && th <= tb };
 }
 
 // Slab test. Returns distance along the (normalised) ray, or Infinity on miss.
