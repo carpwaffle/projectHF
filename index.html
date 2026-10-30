@@ -25,7 +25,7 @@
       <label>Name <input id="name" maxlength="16" placeholder="Player" /></label>
       <label>Mode (when hosting)
         <select id="hackMode">
-          <option value="one">One hack: one hack per life</option>
+          <option value="limit">Default: up to 2 hacks per life</option>
           <option value="any">No limit: any number of hacks</option>
         </select>
       </label>
@@ -60,7 +60,7 @@
     <div id="clickToPlay">Click to play</div>
     <div id="money">$0</div>
     <div id="hackName"></div>
-    <canvas id="minimap" width="220" height="220" hidden></canvas>
+    <canvas id="minimap" width="600" height="600" hidden></canvas>
     <div id="victory" hidden></div>
     <table id="scoreboard" hidden></table>
   </div>
@@ -73,7 +73,7 @@
       <div id="buyMoney"></div>
       <div class="buyCols">
         <div><h3>Weapon</h3><div id="buyList" role="radiogroup"></div></div>
-        <div><h3>Hacks <small id="buyHacksMode">(one at a time)</small></h3><div id="buyHacks" role="group"></div></div>
+        <div><h3>Hacks <small id="buyHacksMode">(up to 2)</small></h3><div id="buyHacks" role="group"></div></div>
       </div>
       <div id="buyTotal"></div>
       <label id="botRow" hidden>Bots (AI players): fill teams to

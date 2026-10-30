@@ -284,6 +284,7 @@ export class Character {
     const skinName = SKINS[((skin % SKINS.length) + SKINS.length) % SKINS.length];
     this.gender = skinName.startsWith('Female') ? 'female' : 'male';
 
+    this.name = name;
     this.team = team;
     this.dead = false;
     this.velocity = new THREE.Vector3();

@@ -1,5 +1,6 @@
 // Map hack: a north-up minimap in the lower-left corner showing every player
-// (teammates and enemies in their team colours, us as an arrow) and every
+// (teammates and enemies in their team colours with their names, us as an
+// arrow) and every
 // pickup spot (white: weapon, green: heal pack, yellow: money) with its
 // countdown while empty.
 //
@@ -13,6 +14,7 @@ const SPOT_COLOURS = { weapon: '#ffffff', heal: '#3cff6e', money: '#ffd23c' };
 const RANGE = 52; // metres from the centre to the edge of the map shown
 const GRID = 160; // background resolution (cells per side)
 const DRAW_INTERVAL = 1000 / 30; // ms between redraws
+const SIZE = 300; // CSS pixels per side (the canvas has 2x for sharp text)
 
 export class Minimap {
   // getWorld: () => World (the map loads after this is made); renderer: for
@@ -37,7 +39,7 @@ export class Minimap {
 
   // Game (x, z) -> canvas pixels; north (-z) up.
   toCanvas(x, z) {
-    const s = this.canvas.width / (2 * RANGE);
+    const s = SIZE / (2 * RANGE);
     return [(x + RANGE) * s, (z + RANGE) * s];
   }
 
@@ -69,9 +71,9 @@ export class Minimap {
 
   draw(me, myTeam) {
     const g = this.canvas.getContext('2d');
-    const size = this.canvas.width;
+    g.setTransform(this.canvas.width / SIZE, 0, 0, this.canvas.width / SIZE, 0, 0);
     g.imageSmoothingEnabled = true;
-    g.drawImage(this.background, 0, 0, size, size);
+    g.drawImage(this.background, 0, 0, SIZE, SIZE);
 
     // Pickup spots: dots, or the countdown while empty.
     const now = performance.now() / 1000;
@@ -98,18 +100,28 @@ export class Minimap {
       }
     });
 
-    // Players.
+    // Players: a dot with the name above it (kept inside the map).
+    g.font = 'bold 10px system-ui, sans-serif';
+    g.lineJoin = 'round';
     for (const avatar of this.renderer.avatars.values()) {
       if (avatar.dead) continue;
       const p = avatar.object.position;
       const [cx, cy] = this.toCanvas(p.x, p.z);
-      g.fillStyle = TEAMS[avatar.team]?.color ?? '#fff';
+      const colour = TEAMS[avatar.team]?.color ?? '#fff';
+      g.fillStyle = colour;
       g.strokeStyle = '#000';
       g.lineWidth = 1;
       g.beginPath();
       g.arc(cx, cy, 4, 0, Math.PI * 2);
       g.fill();
       g.stroke();
+      if (!avatar.name) continue;
+      const half = g.measureText(avatar.name).width / 2 + 2;
+      const tx = Math.min(SIZE - half, Math.max(half, cx));
+      const ty = cy < 16 ? cy + 12 : cy - 10;
+      g.lineWidth = 3;
+      g.strokeText(avatar.name, tx, ty);
+      g.fillText(avatar.name, tx, ty);
     }
 
     // Us: an arrow pointing where we look.

@@ -1843,3 +1843,26 @@ body), with the preview's pose.
   - Bots (4 vs 4, 30 s): moving 40-140 m each, using stairs; no errors.
     `nav-worker.js` still plans steps up to 0.4 m; bots jump when stuck.
   - Same cost per step as before.
+
+## 53. Default mode: up to 2 hacks; recoil $500, aim $2,000 (2026-10-31)
+
+- Prices: recoil hack $400 → $500, aim hack $1,500 → $2,000 (`HACKS`
+  order unchanged: still by price; recoil before infinite ammo at $500).
+- The default mode allows up to `HACK_LIMIT` (2) hacks per life instead of
+  one (section 49). The mode is now a number, `hackLimit` (2, or 0 for no
+  limit), passed to `HostServer` and sent in `welcome`; `onSpawn` checks
+  `withinHackLimit`. Buy menu: at the limit the unticked hacks are locked
+  (no more replacing); remembered picks drop the priciest until within the
+  limit and affordable. The room info line shows "Up to 2 hacks" or
+  "No limit". The Mode select's value is `limit` / `any` (a remembered
+  `one` falls back to the default).
+
+## 54. Bigger minimap with player names (2026-10-31)
+
+- Minimap 220 → 300 px (CSS; the canvas is 600 x 600 and drawn at 2x so
+  text stays sharp; `SIZE` in `minimap.js`). Same `RANGE` (the whole map).
+- Each player's dot has their name above it (bold 10 px, team colour,
+  black outline; below the dot near the top edge, kept inside the map
+  horizontally). `Character` now keeps its `name`.
+- Checked in Chrome with 7 bots: names readable; players standing together
+  overlap.

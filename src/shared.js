@@ -92,24 +92,28 @@ export const KILL_REWARD = 500;
 
 // Hacks: bought in the buy menu like weapons (separately: you pay for the
 // weapon and each hack), active until your next death. How many at once is
-// the host's choice: one (the default mode) or any number (no limit mode).
+// the host's choice: up to HACK_LIMIT (the default mode) or any number (no
+// limit mode).
 // A player's hacks are a bit mask (bit i: HACKS[i]), the number sent over
 // the network; 0 = none. Listed (and shown in the buy menu) by price.
 export const HACKS = [
   { id: 'map', name: 'Map hack', price: 300, desc: 'Minimap: every player and pickup timer' },
   { id: 'speed', name: 'Speed hack', price: 400, desc: 'Move 3x faster' },
-  { id: 'recoil', name: 'Recoil hack', price: 400, desc: '85% less spread' },
+  { id: 'recoil', name: 'Recoil hack', price: 500, desc: '85% less spread' },
   { id: 'ammo', name: 'Infinite ammo hack', price: 500, desc: 'No reloads; faster shotgun and sniper' },
   { id: 'noclip', name: 'No-clip hack', price: 600, desc: 'Walk through walls and ceilings' },
   { id: 'fly', name: 'Fly hack', price: 700, desc: 'Q up, E down (up to 25 m); a bit faster' },
   { id: 'wall', name: 'Wall hack', price: 900, desc: 'See players and hitboxes through walls' },
   { id: 'hp', name: 'HP hack', price: 1000, desc: '1500 HP' },
-  { id: 'aim', name: 'Aim hack', price: 1500, desc: 'Hold Shift: lock onto a visible head' },
+  { id: 'aim', name: 'Aim hack', price: 2000, desc: 'Hold Shift: lock onto a visible head' },
   { id: 'victory', name: 'Victory hack', price: 10000, desc: 'Your team wins the round' },
 ];
 export const ALL_HACKS = (1 << HACKS.length) - 1; // (every bit in use)
 export const hackBit = (id) => 1 << HACKS.findIndex((h) => h.id === id);
-export const atMostOneHack = (mask) => (mask & (mask - 1)) === 0;
+export const HACK_LIMIT = 2; // hacks per life in the default mode
+export const hackCount = (mask) => hackList(mask).length;
+// limit: the room's hacks per life (0: no limit).
+export const withinHackLimit = (mask, limit) => !limit || hackCount(mask) <= limit;
 export const hasHack = (mask, id) => (mask & hackBit(id)) !== 0;
 export const hackList = (mask) => HACKS.filter((_, i) => mask & (1 << i));
 export const hacksPrice = (mask) => hackList(mask).reduce((sum, h) => sum + h.price, 0);

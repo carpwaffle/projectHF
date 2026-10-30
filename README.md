@@ -29,7 +29,8 @@ Controls: WASD move · Space jump · Mouse aim · Click shoot · R reload · Q /
 many at once depends on the room's mode, picked by the host under **Mode**
 before clicking **Host Game** (and shown next to the room code):
 
-- **One hack** (default): one hack per life; ticking another replaces it.
+- **Default:** up to 2 hacks per life; once 2 are ticked the rest are
+  locked until you untick one.
 - **No limit:** as many as you can afford (ticked boxes). They combine:
   e.g. fly + no-clip flies up through floors and ceilings; with speed + fly
   the speed hack's 3x applies.
@@ -38,15 +39,15 @@ Teammates can see each other's hacks on the scoreboard; the other team can't.
 
 | Hack | Price | Effect |
 |---|---|---|
-| Map | $300 | Minimap (lower left): every player, every pickup spot and its countdown |
+| Map | $300 | Minimap (lower left): every player with their name, every pickup spot and its countdown |
 | Speed | $400 | Move 3x faster |
-| Recoil | $400 | 85% less spread |
+| Recoil | $500 | 85% less spread |
 | Infinite ammo | $500 | No reloads; shotgun and sniper fire twice as fast |
 | No-clip | $600 | Walk through walls and ceilings (floors and the boundary still hold) |
 | Fly | $700 | Q up, E down, hover otherwise; up to 25 m, inside the boundary; moves 1.3x faster |
 | Wall | $900 | See every player through walls: silhouette in their team colour plus hitboxes |
 | HP | $1,000 | 1500 HP (heal packs still heal 100) |
-| Aim | $1,500 | Hold Shift: the view locks onto the head of the visible enemy nearest the crosshair |
+| Aim | $2,000 | Hold Shift: the view locks onto the head of the visible enemy nearest the crosshair |
 | Victory | $10,000 | Your team wins the round: 10 s victory screen, then a new round (money, kills and hacks reset) |
 
 **Money.** Everyone starts with $0 (the player named "Admin" with $999,999, for testing) and earns $16 for every second they stay
