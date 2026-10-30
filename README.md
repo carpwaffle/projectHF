@@ -24,10 +24,16 @@ GitHub Pages, Netlify or itch.io.
 
 Controls: WASD move · Space jump · Mouse aim · Click shoot · R reload · Q / E fly up / down (fly hack) · Shift aim lock (aim hack) · 1-6 / wheel switch weapon (only for the player named "Admin") · Right mouse scope (sniper) · M mute · Tab scoreboard · Esc release mouse.
 
-**Hacks.** The core of the game: in the same menu you also buy hacks, as
-many as you can afford (ticked boxes; you pay for the weapon and each hack),
-active until your next death. They combine: e.g. fly + no-clip flies up
-through floors and ceilings; with speed + fly the speed hack's 3x applies.
+**Hacks.** The core of the game: in the same menu you also buy hacks
+(you pay for the weapon and each hack), active until your next death. How
+many at once depends on the room's mode, picked by the host under **Mode**
+before clicking **Host Game** (and shown next to the room code):
+
+- **One hack** (default): one hack per life; ticking another replaces it.
+- **No limit:** as many as you can afford (ticked boxes). They combine:
+  e.g. fly + no-clip flies up through floors and ceilings; with speed + fly
+  the speed hack's 3x applies.
+
 Teammates can see each other's hacks on the scoreboard; the other team can't.
 
 | Hack | Price | Effect |

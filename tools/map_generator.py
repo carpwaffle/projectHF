@@ -819,10 +819,13 @@ def north_buildings():
         # West wing: a big, low-sill west window upstairs (easy to jump out).
         # Bridge: 4 medium windows each side, every 6 m. East wing: medium
         # windows west downstairs (under the bridge) and south upstairs (by
-        # the stair landing). East end: a medium window south.
+        # the stair landing). East end: a medium window south. The window
+        # under the bridge has a low sill: the bridge's slab hangs over it
+        # outside (2.5 m above the sidewalk), so with the usual 0.8 m sill the
+        # gap was 1.7 m for a 1.8 m player and jumping in was a squeeze.
         windows=[(1, 'W', [(-11, 13), (-11, 14)], 0.3, 0.6)] +
                 [(1, side, [(i, j)], 0.25) for side, j in (('N', 15), ('S', 12)) for i in (-5, -2, 1, 4)] +
-                [(0, 'W', [(6, 14)], 0.25), (1, 'S', [(10, 12)], 0.25), (0, 'S', [(15, 12)], 0.25)],
+                [(0, 'W', [(6, 14)], 0.25, 0.4), (1, 'S', [(10, 12)], 0.25), (0, 'S', [(15, 12)], 0.25)],
         rng_key='House01'))
     # House02: 3F west half, 2F east half. Switchback stairs in the 3F half:
     # up east along the north wall (row 9; narrowed to clear the wall), step

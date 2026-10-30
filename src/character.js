@@ -30,7 +30,7 @@
 
 import * as THREE from 'three';
 import { clone as cloneSkinned } from 'three/addons/utils/SkeletonUtils.js';
-import { PLAYER_HEIGHT, TEAMS, WEAPONS, FAST_CYCLE } from './shared.js';
+import { PLAYER_HEIGHT, TEAMS, WEAPONS, FAST_CYCLE, MOVE_SPEED } from './shared.js';
 import { SKINS, assets } from './assets.js';
 import { makeMuzzleFlash } from './effects.js';
 
@@ -686,7 +686,7 @@ export class Character {
     // A foot lands twice per run cycle (phase 0 and 0.5).
     const stepped = this.phase < lastPhase || (lastPhase < 0.5 && this.phase >= 0.5);
     if (stepped && !this.airborne && !this.dead && this.move > 0.3 && weightSum > 0.001) {
-      this.onSound?.('step', clamp(speed / 7, 0.4, 1));
+      this.onSound?.('step', clamp(speed / MOVE_SPEED, 0.4, 1));
     }
     for (const name of allLoco) {
       this.actions[name].time = this.phase * this.actions[name].getClip().duration;

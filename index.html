@@ -23,6 +23,12 @@
     <div class="panel">
       <h1>HACK FPS</h1>
       <label>Name <input id="name" maxlength="16" placeholder="Player" /></label>
+      <label>Mode (when hosting)
+        <select id="hackMode">
+          <option value="one">One hack: one hack per life</option>
+          <option value="any">No limit: any number of hacks</option>
+        </select>
+      </label>
       <button id="hostBtn">Host Game</button>
       <div class="row">
         <input id="codeInput" maxlength="5" placeholder="ROOM CODE" />
@@ -67,7 +73,7 @@
       <div id="buyMoney"></div>
       <div class="buyCols">
         <div><h3>Weapon</h3><div id="buyList" role="radiogroup"></div></div>
-        <div><h3>Hacks <small>(any number)</small></h3><div id="buyHacks" role="group"></div></div>
+        <div><h3>Hacks <small id="buyHacksMode">(one at a time)</small></h3><div id="buyHacks" role="group"></div></div>
       </div>
       <div id="buyTotal"></div>
       <label id="botRow" hidden>Bots (AI players): fill teams to

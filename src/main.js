@@ -5,7 +5,7 @@
 import {
   STATE_SEND_RATE, INTERP_DELAY, EYE_HEIGHT, MAX_HP, MOVE_SPEED, HOST_TIMEOUT,
   MAX_RANGE, TEAMS, WEAPONS, DEFAULT_WEAPON, SWITCH_TIME, RESPAWN_TIME, SPAWN_PROTECTION,
-  ADMIN_NAME, PICKUP_SPOTS, HACKS, hasHack, hackList, hacksPrice, SPEED_HACK, FLY_HACK_SPEED, RECOIL_HACK, fireCooldown, headAABB, lookDir, rayPlayer, spreadFor, spreadDir,
+  ADMIN_NAME, PICKUP_SPOTS, HACKS, hasHack, atMostOneHack, hackList, hacksPrice, SPEED_HACK, FLY_HACK_SPEED, RECOIL_HACK, fireCooldown, headAABB, lookDir, rayPlayer, spreadFor, spreadDir,
 } from './shared.js';
 import { makeRoomCode, openHostPeer, joinRoom } from './net.js';
 import { HostServer, HOST_ID } from './host.js';
@@ -147,6 +147,7 @@ function onMessage(msg) {
       me.dead = true; // until we pick a weapon in the buy menu
       myId = msg.id;
       myTeam = msg.team ?? 0;
+      oneHack = msg.oneHack !== false;
       renderer.setLocalTeam(myTeam);
       showRoomInfo();
       teleport(msg.pos, msg.yaw);
@@ -456,7 +457,7 @@ function updateScoreboard() {
 
 function showRoomInfo() {
   const info = $('roomInfo');
-  info.textContent = myId ? `${roomLabel} · You are ${TEAMS[myTeam].name}` : roomLabel;
+  info.textContent = myId ? `${roomLabel} · ${oneHack ? 'One hack' : 'No limit'} · You are ${TEAMS[myTeam].name}` : roomLabel;
   info.style.borderLeft = myId ? `4px solid ${TEAMS[myTeam].color}` : '';
 }
 
@@ -561,9 +562,11 @@ function updateHud(now) {
 let buy = null; // { readyAt (performance.now ms), sent } while the menu is open
 let buyChoice = DEFAULT_WEAPON; // remembered between deaths
 let buyHacks = 0; // hacks picked (bit mask), remembered too
+let oneHack = true; // the room's mode (from the host's welcome): one hack per life, or any number
 
 // Options: name, price (and a description for hacks). Radio buttons (one
-// weapon) or checkboxes (any number of hacks): onPick(index, checked).
+// weapon) or checkboxes (hacks; in one-hack mode ticking one unticks the
+// rest): onPick(index, checked).
 function buyOptions(items, group, onPick, type = 'radio') {
   return items.map((item, i) => {
     const label = document.createElement('label');
@@ -604,19 +607,21 @@ function openBuyMenu(msg) {
     earned.textContent = `Survived ${msg.alive} s: +$${msg.earned}`;
     info.append(killed, earned);
   } else {
-    info.textContent = msg.round ? 'New round! Pick a weapon and any hacks.' : 'Pick a weapon and any hacks to start with.';
+    const hacks = oneHack ? 'a hack' : 'any hacks';
+    info.textContent = msg.round ? `New round! Pick a weapon and ${hacks}.` : `Pick a weapon and ${hacks} to start with.`;
   }
+  $('buyHacksMode').textContent = oneHack ? '(one at a time)' : '(any number)';
   $('buyList').replaceChildren(...buyOptions(WEAPONS, 'buyWeapon', (i) => { buyChoice = i; }));
   $('buyHacks').replaceChildren(...buyOptions(HACKS, 'buyHack', (i, on) => {
-    buyHacks = on ? buyHacks | (1 << i) : buyHacks & ~(1 << i);
+    if (oneHack) buyHacks = on ? 1 << i : 0;
+    else buyHacks = on ? buyHacks | (1 << i) : buyHacks & ~(1 << i);
   }, 'checkbox'));
   // Last time's picks if still affordable: the weapon, then the hacks
-  // dropping the priciest first.
+  // dropping the priciest first (in one-hack mode keeping only the priciest).
+  const priciest = () => HACKS.reduce((best, h, i) => (buyHacks & (1 << i) && (best < 0 || h.price > HACKS[best].price) ? i : best), -1);
   if (WEAPONS[buyChoice].price > me.money) buyChoice = DEFAULT_WEAPON;
-  while (buyHacks && WEAPONS[buyChoice].price + hacksPrice(buyHacks) > me.money) {
-    const priciest = HACKS.reduce((best, h, i) => (buyHacks & (1 << i) && (best < 0 || h.price > HACKS[best].price) ? i : best), -1);
-    buyHacks &= ~(1 << priciest);
-  }
+  if (oneHack && !atMostOneHack(buyHacks)) buyHacks = 1 << priciest();
+  while (buyHacks && WEAPONS[buyChoice].price + hacksPrice(buyHacks) > me.money) buyHacks &= ~(1 << priciest());
   $('botRow').hidden = !session?.isHost;
   $('botFill').value = String(botFill);
   $('buyMenu').hidden = false;
@@ -639,7 +644,7 @@ function updateBuyMenu(now) {
   const weaponPrice = WEAPONS[buyChoice].price;
   const hackPrice = hacksPrice(buyHacks);
   // Locked: what can't be added with the rest of the picks (picked hacks can
-  // always be unticked).
+  // always be unticked; in one-hack mode a hack replaces the picked one).
   const mark = (list, items, chosen, otherPrice) => list.querySelectorAll('label').forEach((label, i) => {
     const input = label.firstChild;
     const on = chosen(i);
@@ -649,7 +654,7 @@ function updateBuyMenu(now) {
     input.checked = on;
   });
   mark($('buyList'), WEAPONS, (i) => i === buyChoice, hackPrice);
-  mark($('buyHacks'), HACKS, (i) => (buyHacks & (1 << i)) !== 0, weaponPrice + hackPrice);
+  mark($('buyHacks'), HACKS, (i) => (buyHacks & (1 << i)) !== 0, weaponPrice + (oneHack ? 0 : hackPrice));
   const total = weaponPrice + hackPrice;
   $('buyTotal').textContent = `Total $${total.toLocaleString()}`;
   $('buyTotal').classList.toggle('over', total > me.money);
@@ -670,6 +675,12 @@ $('buyStart').addEventListener('click', () => {
 // Remembered in this browser.
 let botFill = 0;
 try { botFill = Number(localStorage.getItem('hackfps.bots')) || 0; } catch { /* (storage blocked) */ }
+
+// Host only: the hack mode of rooms we host (main menu), remembered too.
+try { $('hackMode').value = localStorage.getItem('hackfps.mode') === 'any' ? 'any' : 'one'; } catch { /* (storage blocked) */ }
+$('hackMode').addEventListener('change', () => {
+  try { localStorage.setItem('hackfps.mode', $('hackMode').value); } catch { /* (storage blocked) */ }
+});
 
 $('botFill').addEventListener('change', () => {
   botFill = Number($('botFill').value);
@@ -917,7 +928,7 @@ $('hostBtn').addEventListener('click', async () => {
     return;
   }
 
-  const server = new HostServer(peer, onMessage, world);
+  const server = new HostServer(peer, onMessage, world, { oneHack: $('hackMode').value !== 'any' });
   window.hackfps.server = server; // (dev hook)
   const stopTicker = startTicker(() => server.tick());
   peer.on('error', (err) => console.warn('peer error', err));

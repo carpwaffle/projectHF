@@ -505,7 +505,7 @@ was rewritten to build exactly that layout (the v1 map is kept in
 | Roads | Cross of 16 m roads (asphalt) with 4 m raised sidewalks; the four blocks between them are raised to sidewalk height (0.15 m) |
 | Boundary | No wall. Players are clamped to r = 48.5 m (client physics and host); the game draws a transparent white ring over the ground that fades from clear at the boundary to white 16 m beyond (1 draw call) |
 | House08 (centre) | Octagon, 6 m sides (14.5 m across, adjusted from 12 m to fit the 2 m pieces), 5F, enterable, doors NW + SE. Switchback stairwell in the middle (two 2 m lanes, landings at both ends) up to the top floor (12.15 m). Low cover on each floor |
-| House01 / House09 | Team bases. West wing 2F, **2nd-floor bridge over the road** (no ground floor; 3 m headroom), east wing 2F, east end 1F, annex 1F. Doors, interior walls with doorways, cover on the bridge. 4 team spawns upstairs in the east wing |
+| House01 / House09 | Team bases. West wing 2F, **2nd-floor bridge over the road** (no ground floor; 2.65 m headroom over the road: a 0.5 m slab), east wing 2F, east end 1F, annex 1F. Doors, interior walls with doorways, cover on the bridge. 4 team spawns upstairs in the east wing |
 | House02 / House10 | 3F + 2F halves, enterable; switchback stairs to the 3rd floor |
 | House05 / House13 | 4F, 8 m square at 45°, enterable; switchback stairs to the top floor |
 | House04 / House12 | 1F, 8 m square at 45° (squared off), enterable, 2 doors |
@@ -1763,3 +1763,83 @@ body), with the preview's pose.
 - Checked with `shared.js`'s hitboxes, a target strafing at 7 m/s at
   2–50 m: old lead missed at every distance; the new aim hits the head; the
   new aim from a 0.25 m-stale origin missed (now avoided by `o`).
+
+## 49. Hack modes: one hack (default) or no limit (2026-10-30)
+
+- The host picks the mode on the main menu (**Mode (when hosting)**, a
+  select above Host Game; remembered in `localStorage` as `hackfps.mode`):
+  - **One hack** (default): one hack per life, as before section 38.
+  - **No limit:** any number at once (section 38's behaviour).
+- `HostServer` takes `{ oneHack }`; `welcome` carries `oneHack` to every
+  client. `onSpawn` rejects a mask with more than one bit in one-hack mode
+  (`atMostOneHack` in `shared.js`).
+- Buy menu: still checkboxes, but in one-hack mode ticking a hack unticks
+  the rest, and a hack is only locked if it plus the weapon is too
+  expensive (it replaces the picked one). The header says "(one at a time)"
+  or "(any number)". Remembered picks from a no-limit game keep only the
+  priciest hack.
+- The room info line (top of the HUD) shows "One hack" or "No limit".
+- Checked in Chrome as host (Admin): one-hack mode keeps only the last
+  ticked hack and the host refuses a forged `h: 3`; no-limit mode takes
+  three hacks (`h: 11`).
+
+## 50. Slower movement (2026-10-30)
+
+- `MOVE_SPEED` 7 → 5.5 m/s (about 20% slower). Everything else follows
+  it: the speed hack (3x: 16.5 m/s), fly hack (1.3x), bots, spread while
+  moving, the hitbox lean and the run animation. Footstep volume now uses
+  `MOVE_SPEED` instead of a hard-coded 7.
+- A running jump now covers ~3.9 m instead of ~4.9 m (0.7 s in the air);
+  no route in the map needed the longer jump.
+
+## 51. Low sill on the window under the House01 / House09 bridge (2026-10-30)
+
+- User: jumping in and out of the window under the bridge (east wing,
+  ground floor, facing the road) got harder.
+- Cause: the map hadn't changed (collision identical across the last
+  commits); the slower `MOVE_SPEED` (section 50) did it. The bridge's 0.5 m
+  slab hangs over the window outside: its underside is 2.5 m above the
+  sidewalk, so a jump there bumps the slab (feet top out ~0.85 m), and the
+  0.8 m sill (top 0.95) left a 1.7 m gap for a 1.8 m player. Simulated
+  run-and-jump in from the road (`world.stepPlayer`, jump pressed 0-2.5 m
+  before the wall): worked from up to 1.65 m out at 7 m/s, 1.2 m at 5.5.
+- Fix: that window's sill 0.8 → 0.4 m (`map_generator.py`, House01
+  `windows`; House09 is its twin). Map regenerated (`--force`) and rebaked.
+  Collision diff against the previous map: only the two sills (top 0.95 →
+  0.55). Now: jumping in works from up to 1.75 m out at 5.5 m/s (2.5 m at
+  7); out works from anywhere; walking into it without jumping still stops.
+  Sill 0.6 was tried first: only 1.45 m.
+
+## 52. Stepping onto kerbs without jumping (2026-10-30)
+
+- User: after the slowdown (section 50), going from the road up onto the
+  sidewalk (a 0.15 m kerb) often needed a jump.
+- Cause: there was no step-up. The capsule's round bottom rode up an edge
+  only when pushed into it hard enough, which depended on speed, angle and
+  spot. Measured on 24 road-to-sidewalk spots, walking straight at the kerb:
+  all 24 at 7 m/s, 6 at 5.5 m/s; at 30° only 6 even at 7 m/s. The same
+  effect let the speed hack walk over the new 0.4 m window sill (section 51).
+- Fix (`world.js`): movement now collides through `collide(x, y, z, ref)`.
+  - `STEP_HEIGHT` = 0.25 m. Floors, and level or gently sloped edges (a
+    kerb's top, a ramp's side; under ~45°), up to `STEP_HEIGHT` above
+    `ref` are stood on (pushed up, onto an edge no higher than the edge).
+    Higher edges and floors push back level, never partly up.
+  - `ref` is `player.groundY`: the height of the floor face last stood on,
+    kept while standing on an edge (so you can't climb one step at a time),
+    taken from the feet in the air and when unknown or far from the feet
+    (respawn, teleport).
+  - Edges shared by two triangles in the same plane (a wall quad's
+    diagonal, `flatEdges` built at load: ~18k) are ignored: they read as
+    sloped edges and lifted players walking along walls (the old code was
+    pushed partly up by them too).
+- Checked in Chrome against the previous `world.js` (same map):
+  - Kerb, 24 spots: 24/24 at 0°, 30° and 60°, at 30/60/144 fps and with
+    the speed hack (old: 6/24 at 5.5 m/s).
+  - Window under the bridge: never walked in without jumping (old: the
+    speed hack walked in); jumping in from up to 2 m out; out from anywhere.
+  - ~3,000 random 2 s walks from random floors: none end lower than the old
+    code; the few that climb higher step onto a staircase's low end from
+    the side.
+  - Bots (4 vs 4, 30 s): moving 40-140 m each, using stairs; no errors.
+    `nav-worker.js` still plans steps up to 0.4 m; bots jump when stuck.
+  - Same cost per step as before.

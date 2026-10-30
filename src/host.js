@@ -7,7 +7,7 @@ import {
   SNAPSHOT_RATE, MAX_HP, RESPAWN_TIME, EYE_HEIGHT, MAX_RANGE, TEAMS,
   WEAPONS, DEFAULT_WEAPON, SWITCH_TIME, SPAWN_PROTECTION, shotDamage, ADMIN_NAME, ADMIN_MONEY,
   PICKUP_RADIUS, PICKUP_RESPAWN, randomPickupWeapon, HEAL_RESPAWN, ALL_SPOTS, MONEY_AMOUNT, MONEY_RESPAWN,
-  SURVIVAL_RATE, KILL_REWARD, PLAYER_TIMEOUT, ALL_HACKS, hasHack, hacksPrice, HACK_HP, HEAL_AMOUNT, VICTORY_SCREEN, fireCooldown,
+  SURVIVAL_RATE, KILL_REWARD, PLAYER_TIMEOUT, ALL_HACKS, hasHack, atMostOneHack, hacksPrice, HACK_HP, HEAL_AMOUNT, VICTORY_SCREEN, fireCooldown,
   pickSpawn, lookDir, rayPlayer, normalize,
 } from './shared.js';
 import { SKINS } from './assets.js';
@@ -27,8 +27,10 @@ const HISTORY = 12; // snapshots kept for lag compensation (0.6 s at 20 per seco
 
 export class HostServer {
   // world: the map's World (collision, spawns), shared with the local client.
-  constructor(peer, deliverLocal, world) {
+  // oneHack: the default mode, one hack per life (false: any number).
+  constructor(peer, deliverLocal, world, { oneHack = true } = {}) {
     this.world = world;
+    this.oneHack = oneHack;
     this.peer = peer;
     this.deliverLocal = deliverLocal; // (msg) => void, feeds the host's own client
     this.players = new Map();
@@ -110,7 +112,7 @@ export class HostServer {
     };
     player.money = this.startMoney(player);
     this.players.set(id, player);
-    this.sendTo(id, { t: 'welcome', id, pos: player.pos, yaw: spawn.yaw, team });
+    this.sendTo(id, { t: 'welcome', id, pos: player.pos, yaw: spawn.yaw, team, oneHack: this.oneHack });
     this.sendTo(id, { t: 'buy', money: player.money, wait: 0 });
     this.broadcast({ t: 'feed', text: `${player.name} joined ${TEAMS[team].name}` });
   }
@@ -336,6 +338,7 @@ export class HostServer {
   // delay is over, if they can afford both; charged at the spawn).
   onSpawn(player, index, hack) {
     if (!player.dead || !Number.isInteger(index) || !WEAPONS[index] || !Number.isInteger(hack) || hack < 0 || hack > ALL_HACKS) return;
+    if (this.oneHack && !atMostOneHack(hack)) return;
     if (WEAPONS[index].price + hacksPrice(hack) > player.money) return;
     player.spawnWeapon = index;
     player.spawnHack = hack;

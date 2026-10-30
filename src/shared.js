@@ -8,7 +8,7 @@ export const INTERP_DELAY = 100; // ms clients render remote players behind real
 export const PLAYER_RADIUS = 0.35;
 export const PLAYER_HEIGHT = 1.8;
 export const EYE_HEIGHT = 1.6;
-export const MOVE_SPEED = 7;
+export const MOVE_SPEED = 5.5;
 export const JUMP_SPEED = 7;
 export const GRAVITY = 20;
 
@@ -91,7 +91,8 @@ export const SURVIVAL_RATE = 16; // dollars per second alive
 export const KILL_REWARD = 500;
 
 // Hacks: bought in the buy menu like weapons (separately: you pay for the
-// weapon and each hack), any number at once, active until your next death.
+// weapon and each hack), active until your next death. How many at once is
+// the host's choice: one (the default mode) or any number (no limit mode).
 // A player's hacks are a bit mask (bit i: HACKS[i]), the number sent over
 // the network; 0 = none.
 export const HACKS = [
@@ -108,6 +109,7 @@ export const HACKS = [
 ];
 export const ALL_HACKS = (1 << HACKS.length) - 1; // (every bit in use)
 export const hackBit = (id) => 1 << HACKS.findIndex((h) => h.id === id);
+export const atMostOneHack = (mask) => (mask & (mask - 1)) === 0;
 export const hasHack = (mask, id) => (mask & hackBit(id)) !== 0;
 export const hackList = (mask) => HACKS.filter((_, i) => mask & (1 << i));
 export const hacksPrice = (mask) => hackList(mask).reduce((sum, h) => sum + h.price, 0);
