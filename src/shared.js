@@ -87,7 +87,7 @@ export const weaponIndex = (id) => WEAPONS.findIndex((w) => w.id === id);
 // Money: earned on every death (SURVIVAL_RATE per second alive) and kill
 // (KILL_REWARD); spent on the weapon you spawn with (WEAPONS[].price). Everyone
 // starts with $0. The host keeps the accounts.
-export const SURVIVAL_RATE = 8; // dollars per second alive
+export const SURVIVAL_RATE = 16; // dollars per second alive
 export const KILL_REWARD = 500;
 
 // Hacks: bought in the buy menu like weapons (separately: you pay for the

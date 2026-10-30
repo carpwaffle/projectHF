@@ -22,6 +22,7 @@ const round = (n) => Math.round(n * 100) / 100;
 // early here keeps the first shots after a reload from being rejected.
 const RELOAD_GRACE = 0.2;
 
+const MAX_SHOT_ORIGIN_OFFSET = 1.5; // m between a shot's origin and the shooter's last reported eye
 const HISTORY = 12; // snapshots kept for lag compensation (0.6 s at 20 per second): the furthest back a shot is checked
 
 export class HostServer {
@@ -172,7 +173,7 @@ export class HostServer {
     if (!player) return;
     player.lastSeen = performance.now() / 1000; // (any message, incl. 'ping')
     if (msg.t === 'bye') return this.removePlayer(id); // closed their tab
-    if (msg.t === 'ping') return this.sendTo(id, { t: 'pong', at: msg.at }); // (round-trip time, for the aim hack)
+    if (msg.t === 'ping') return this.sendTo(id, { t: 'pong', at: msg.at }); // (round-trip time)
     if (msg.t === 'state') this.onState(player, msg);
     else if (msg.t === 'shoot') this.onShoot(player, msg);
     else if (msg.t === 'reload') this.onReload(player);
@@ -206,7 +207,12 @@ export class HostServer {
     if (!infinite) shooter.ammo[shooter.weapon] -= 1;
     shooter.protectedUntil = 0; // firing ends spawn protection
 
-    const origin = [shooter.pos[0], shooter.pos[1] + EYE_HEIGHT, shooter.pos[2]];
+    // Fired from the shooter's eye as they saw it (o): our copy of their
+    // position is one 'state' message behind, which while running puts the
+    // shot ~0.3 m off. Only trusted near where we have them (bots send none).
+    const eye = [shooter.pos[0], shooter.pos[1] + EYE_HEIGHT, shooter.pos[2]];
+    const o = Array.isArray(msg.o) && msg.o.length === 3 && msg.o.every(Number.isFinite) ? msg.o : null;
+    const origin = o && Math.hypot(...o.map((x, i) => x - eye[i])) < MAX_SHOT_ORIGIN_OFFSET ? o : eye;
     // The shot's direction(s), spread included (applied by the shooter so their
     // tracers show where the shots really went; see README "Cheating"): one,
     // or one per pellet.

@@ -338,8 +338,8 @@ function tryShoot(now) {
   }
 
   session.send(w.pellets
-    ? { t: 'shoot', w: me.weapon, yaw: me.yaw, pitch: me.pitch, ds: dirs, v: viewing }
-    : { t: 'shoot', w: me.weapon, yaw: me.yaw, pitch: me.pitch, d: aim, v: viewing }, true);
+    ? { t: 'shoot', w: me.weapon, yaw: me.yaw, pitch: me.pitch, o: origin, ds: dirs, v: viewing }
+    : { t: 'shoot', w: me.weapon, yaw: me.yaw, pitch: me.pitch, o: origin, d: aim, v: viewing }, true);
   if (me.ammo[me.weapon] === 0) startReload(now); // auto-reload when the magazine runs dry
 }
 
@@ -714,28 +714,12 @@ function updateVictory(now) {
 
 // ---- aim hack ---------------------------------------------------------------
 // While Shift is held: snap the view onto the head of the visible enemy
-// closest to where we're aiming (in sight and on screen), led by its
-// movement: other players are drawn INTERP_DELAY in the past, and the shot
-// reaches the host half a round trip from now, which checks it against
-// where they are then. So aim where the target will be (INTERP_DELAY + rtt)
-// ahead of where it's drawn.
-
-// A player's velocity (m/s) from the latest snapshots (zero if unknown or
-// they just respawned).
-function velocityOf(id) {
-  const b = snapshots[snapshots.length - 1];
-  const a = snapshots[Math.max(0, snapshots.length - 3)]; // ~100 ms earlier (less jitter than the last pair)
-  const pb = b?.players.get(id);
-  const pa = a?.players.get(id);
-  const dt = (b?.time - a?.time) / 1000;
-  if (!pa || !pb || !(dt > 0.02)) return [0, 0, 0];
-  const v = pb.p.map((x, i) => (x - pa.p[i]) / dt);
-  return Math.hypot(v[0], v[2]) > 30 ? [0, 0, 0] : v; // (teleported: respawn)
-}
+// closest to where we're aiming (in sight and on screen), exactly where it's
+// drawn: with lag compensation the host checks the shot against what we saw
+// (see HostServer.seenBy), so there's nothing to lead.
 
 const _head = [0, 0, 0];
 function aimLock() {
-  const lead = (INTERP_DELAY + rtt) / 1000; // seconds
   const eye = [me.pos[0], me.pos[1] + EYE_HEIGHT, me.pos[2]];
   const view = lookDir(me.yaw, me.pitch);
   const halfFov = (renderer.camera.fov / 2) * (Math.PI / 180);
@@ -753,8 +737,7 @@ function aimLock() {
     if (angle >= bestAngle) continue;
     if (world.raycast(eye, dir, dist) < dist - 0.05) continue; // behind a wall
     bestAngle = angle;
-    const v = velocityOf(id);
-    best = d.map((x, i) => x + v[i] * lead);
+    best = d;
   }
   if (!best) return;
   me.yaw = Math.atan2(-best[0], -best[2]);
@@ -831,7 +814,7 @@ function frame(now) {
 requestAnimationFrame(frame);
 
 // For inspecting the game from the browser console while developing.
-window.hackfps = { renderer, me, world, audioDebug, velocityOf, rtt: () => rtt };
+window.hackfps = { renderer, me, world, audioDebug, rtt: () => rtt };
 
 // ---- host / join -----------------------------------------------------------
 

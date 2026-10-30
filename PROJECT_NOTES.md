@@ -1742,3 +1742,24 @@ There were two causes.
 
 **Preview:** a Hitboxes button draws the three boxes live (yellow head, red
 body), with the preview's pose.
+
+## 48. Survival money doubled; aim hack and shot origin fixed (2026-10-30)
+
+- **Money:** `SURVIVAL_RATE` 8 → 16 dollars per second alive.
+- **Aim hack missed moving targets (most visibly up close):** the lead from
+  section 39 was still on after section 47's lag compensation. The host now
+  checks shots against what the shooter saw (`seenBy`), so leading by
+  velocity × (`INTERP_DELAY` + `rtt`) put the aim ~0.7–1 m ahead of the
+  head, a fixed distance in metres. That's a few degrees far away, but about
+  20° at 2 m, so it looked worst up close. The aim angle itself was always
+  from the eye to the head's centre, so distance was already accounted for.
+  - `aimLock` now aims at the drawn head; `velocityOf` is removed. `rtt`
+    and ping/pong stay (debug: `hackfps.rtt()`).
+- **Shot origin:** the host fired from its copy of the shooter's position,
+  one `state` message (up to 33 ms) plus the trip behind. Running at 7 m/s
+  that's ~0.25 m sideways, enough to miss the head even with a perfect aim.
+  Shots now carry `o` (the client's eye), used when within
+  `MAX_SHOT_ORIGIN_OFFSET` (1.5 m) of the last reported eye; bots send none.
+- Checked with `shared.js`'s hitboxes, a target strafing at 7 m/s at
+  2–50 m: old lead missed at every distance; the new aim hits the head; the
+  new aim from a 0.25 m-stale origin missed (now avoided by `o`).

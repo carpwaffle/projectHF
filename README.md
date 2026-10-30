@@ -43,7 +43,7 @@ Teammates can see each other's hacks on the scoreboard; the other team can't.
 | Aim | $900 | Hold Shift: the view locks onto the head of the visible enemy nearest the crosshair |
 | Victory | $10,000 | Your team wins the round: 10 s victory screen, then a new round (money, kills and hacks reset) |
 
-**Money.** Everyone starts with $0 (the player named "Admin" with $999,999, for testing) and earns $8 for every second they stay
+**Money.** Everyone starts with $0 (the player named "Admin" with $999,999, for testing) and earns $16 for every second they stay
 alive (paid when they die) and $500 per kill; the scoreboard (Tab) and the
 bottom-left of the HUD show it. On joining and after every death a menu lets
 you pick the weapon to spawn with: the pistol is free, the others cost money
