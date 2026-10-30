@@ -94,17 +94,17 @@ export const KILL_REWARD = 500;
 // weapon and each hack), active until your next death. How many at once is
 // the host's choice: one (the default mode) or any number (no limit mode).
 // A player's hacks are a bit mask (bit i: HACKS[i]), the number sent over
-// the network; 0 = none.
+// the network; 0 = none. Listed (and shown in the buy menu) by price.
 export const HACKS = [
   { id: 'map', name: 'Map hack', price: 300, desc: 'Minimap: every player and pickup timer' },
   { id: 'speed', name: 'Speed hack', price: 400, desc: 'Move 3x faster' },
   { id: 'recoil', name: 'Recoil hack', price: 400, desc: '85% less spread' },
   { id: 'ammo', name: 'Infinite ammo hack', price: 500, desc: 'No reloads; faster shotgun and sniper' },
-  { id: 'wall', name: 'Wall hack', price: 600, desc: 'See players and hitboxes through walls' },
+  { id: 'noclip', name: 'No-clip hack', price: 600, desc: 'Walk through walls and ceilings' },
   { id: 'fly', name: 'Fly hack', price: 700, desc: 'Q up, E down (up to 25 m); a bit faster' },
-  { id: 'noclip', name: 'No-clip hack', price: 800, desc: 'Walk through walls and ceilings' },
-  { id: 'hp', name: 'HP hack', price: 800, desc: '1500 HP' },
-  { id: 'aim', name: 'Aim hack', price: 900, desc: 'Hold Shift: lock onto a visible head' },
+  { id: 'wall', name: 'Wall hack', price: 900, desc: 'See players and hitboxes through walls' },
+  { id: 'hp', name: 'HP hack', price: 1000, desc: '1500 HP' },
+  { id: 'aim', name: 'Aim hack', price: 1500, desc: 'Hold Shift: lock onto a visible head' },
   { id: 'victory', name: 'Victory hack', price: 10000, desc: 'Your team wins the round' },
 ];
 export const ALL_HACKS = (1 << HACKS.length) - 1; // (every bit in use)
