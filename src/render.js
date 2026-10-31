@@ -157,7 +157,7 @@ export class Renderer {
     const avatar = this.ensureAvatar(id, name, skin, team);
     avatar.update(dt, state);
     // For the hitboxes (shared.js headCenter): as drawn.
-    avatar.pose = { yaw: state.yaw, pitch: state.pitch, weapon: state.weapon, vel: state.vel, skin };
+    avatar.pose = { yaw: state.yaw, pitch: state.pitch, weapon: state.weapon, vel: state.vel, skin, crouch: avatar.crouch };
   }
 
   removeAvatar(id) {

@@ -13,7 +13,7 @@
 // while it tracks the target (the weapon's spread applies on top).
 
 import {
-  EYE_HEIGHT, WEAPONS, DEFAULT_WEAPON, PICKUP_RADIUS,
+  eyeHeight, WEAPONS, DEFAULT_WEAPON, PICKUP_RADIUS,
   lookDir, spreadFor, spreadDir, fireCooldown, headCenter,
 } from './shared.js';
 import { NavGraph } from './nav.js';
@@ -71,7 +71,7 @@ export class BotManager {
         });
       }).catch((err) => {
         console.warn('bots: navigation graph failed', err);
-        this.server.broadcast({ t: 'feed', text: 'Bots unavailable on this map' });
+        this.server.broadcast({ t: 'feed', key: 'noBots' });
       });
     }
   }
@@ -226,7 +226,7 @@ class Bot {
   // ---- seeing -------------------------------------------------------------
 
   eye(p) {
-    return [p.pos[0], p.pos[1] + EYE_HEIGHT, p.pos[2]];
+    return [p.pos[0], p.pos[1] + eyeHeight(p.crouch), p.pos[2]];
   }
 
   canSee(from, q) {

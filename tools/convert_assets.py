@@ -53,6 +53,11 @@ CLIPS = {
     'Jump Loop': 'jump_loop',
     'Jump Down': 'jump_down',
     'Death': 'death',
+    'Crouch Idle': 'crouch_idle',
+    'Crouch Walk Forward': 'crouch_forward',
+    'Crouch Walk Backward': 'crouch_backward',
+    'Crouch Walk Left': 'crouch_left',
+    'Crouch Walk Right': 'crouch_right',
 }
 # Pistol clips (fbx/Character Animation/Pistol), as pistol_*. Mixamo's pistol
 # jump is one clip: split into up / apex loop / down by frame range (the

@@ -37,10 +37,15 @@ export function makeRoomCode() {
   return code;
 }
 
-function withTimeout(promise, ms, message) {
+// An error whose message the menu shows in the player's language (i18n.js key).
+function gameError(key, params) {
+  return Object.assign(new Error(key), { i18n: key, params });
+}
+
+function withTimeout(promise, ms, key) {
   return Promise.race([
     promise,
-    new Promise((_, reject) => setTimeout(() => reject(new Error(message)), ms)),
+    new Promise((_, reject) => setTimeout(() => reject(gameError(key)), ms)),
   ]);
 }
 
@@ -54,7 +59,7 @@ export function openHostPeer(code) {
   // If we lose the signaling server, existing games keep working but new
   // players can't join until we reconnect.
   peer.on('disconnected', () => { if (!peer.destroyed) peer.reconnect(); });
-  return withTimeout(ready, 10000, 'Timed out reaching the signaling server');
+  return withTimeout(ready, 10000, 'net.signalTimeout');
 }
 
 // Resolves with { peer, rel, state } once both channels to the host are open.
@@ -64,7 +69,7 @@ export function joinRoom(code) {
   let reachedHost = false;
   const ready = new Promise((resolve, reject) => {
     peer.once('error', (err) => {
-      reject(err.type === 'peer-unavailable' ? new Error('Room not found') : err);
+      reject(err.type === 'peer-unavailable' ? gameError('net.roomNotFound') : err);
     });
     peer.once('open', () => {
       const hostId = ID_PREFIX + code;
@@ -78,8 +83,8 @@ export function joinRoom(code) {
   return withTimeout(ready, 15000, 'timeout').catch((err) => {
     const ice = rel?.peerConnection?.iceConnectionState;
     peer.destroy();
-    if (err.message !== 'timeout') throw err;
-    throw new Error(explainFailure(ice, reachedHost));
+    if (err.i18n !== 'timeout') throw err;
+    throw explainFailure(ice, reachedHost);
   });
 }
 
@@ -100,14 +105,9 @@ function watchIce(conn, onRemoteAnswer) {
   attach();
 }
 
+// Why a join timed out (the messages are in i18n.js: net.*).
 function explainFailure(ice, reachedHost) {
-  if (!reachedHost) {
-    return 'The host didn\'t respond. Is the host tab still open on the game screen?';
-  }
-  if (ice === 'checking' || ice === 'new' || ice === 'failed') {
-    return 'Found the host, but the browsers couldn\'t open a direct connection. '
-      + 'Testing on one computer? Open the game via http://localhost:8080 in both browsers. '
-      + 'A VPN or firewall may block direct connections; try with it off, or add a TURN server in src/config.js.';
-  }
-  return `Could not connect to host (ICE state: ${ice ?? 'unknown'})`;
+  if (!reachedHost) return gameError('net.noAnswer');
+  if (ice === 'checking' || ice === 'new' || ice === 'failed') return gameError('net.noDirect');
+  return gameError('net.failed', { state: ice ?? 'unknown' });
 }

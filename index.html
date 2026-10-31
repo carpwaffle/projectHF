@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="ko">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -22,17 +22,18 @@
   <div id="menu" class="overlay">
     <div class="panel">
       <h1>HACK FPS</h1>
-      <label>Name <input id="name" maxlength="16" placeholder="Player" /></label>
-      <label>Mode (when hosting)
+      <div id="langSwitch" role="group" aria-label="Language"></div>
+      <label><span data-i18n="menu.name">Name</span> <input id="name" maxlength="16" placeholder="Player" data-i18n-placeholder="menu.namePlaceholder" /></label>
+      <label><span data-i18n="menu.mode">Mode (when hosting)</span>
         <select id="hackMode">
           <option value="limit">Default: up to 2 hacks per life</option>
-          <option value="any">No limit: any number of hacks</option>
+          <option value="any" data-i18n="mode.any">No limit: any number of hacks</option>
         </select>
       </label>
-      <button id="hostBtn">Host Game</button>
+      <button id="hostBtn" data-i18n="menu.host">Host Game</button>
       <div class="row">
-        <input id="codeInput" maxlength="5" placeholder="ROOM CODE" />
-        <button id="joinBtn">Join</button>
+        <input id="codeInput" maxlength="5" placeholder="ROOM CODE" data-i18n-placeholder="menu.codePlaceholder" />
+        <button id="joinBtn" data-i18n="menu.join">Join</button>
       </div>
       <p id="status"></p>
     </div>
@@ -55,9 +56,9 @@
     <div id="scope" hidden></div>
     <div id="weaponName"></div>
     <div id="ammo"><span id="ammoCount">30</span> / <span id="magSize">30</span></div>
-    <div id="reloadMsg" hidden>Reloading…</div>
-    <div id="deadMsg" hidden>You died — respawning…</div>
-    <div id="clickToPlay">Click to play</div>
+    <div id="reloadMsg" hidden data-i18n="hud.reloading">Reloading…</div>
+    <div id="deadMsg" hidden></div>
+    <div id="clickToPlay" data-i18n="hud.clickToPlay">Click to play</div>
     <div id="money">$0</div>
     <div id="hackName"></div>
     <canvas id="minimap" width="600" height="600" hidden></canvas>
@@ -68,22 +69,22 @@
   <!-- Shown on joining and after every death: pick the weapon to spawn with. -->
   <div id="buyMenu" class="overlay" hidden>
     <div class="panel buy">
-      <h2 id="buyTitle">Choose your loadout</h2>
+      <h2 id="buyTitle" data-i18n="buy.title">Choose your loadout</h2>
       <p id="buyInfo"></p>
       <div id="buyMoney"></div>
       <div class="buyCols">
-        <div><h3>Weapon</h3><div id="buyList" role="radiogroup"></div></div>
-        <div><h3>Hacks <small id="buyHacksMode">(up to 2)</small></h3><div id="buyHacks" role="group"></div></div>
+        <div><h3 data-i18n="buy.weapon">Weapon</h3><div id="buyList" role="radiogroup"></div></div>
+        <div><h3><span data-i18n="buy.hacks">Hacks</span> <small id="buyHacksMode">(up to 2)</small></h3><div id="buyHacks" role="group"></div></div>
       </div>
       <div id="buyTotal"></div>
-      <label id="botRow" hidden>Bots (AI players): fill teams to
+      <label id="botRow" hidden><span data-i18n="buy.bots">Bots (AI players): fill teams to</span>
         <select id="botFill">
-          <option value="0">Off</option><option value="1">1 vs 1</option><option value="2">2 vs 2</option>
+          <option value="0" data-i18n="buy.botsOff">Off</option><option value="1">1 vs 1</option><option value="2">2 vs 2</option>
           <option value="3">3 vs 3</option><option value="4">4 vs 4</option>
         </select>
       </label>
       <button id="buyStart">Start</button>
-      <p class="help">WASD move · Space jump · Mouse aim · Click shoot · R reload · M mute · Tab scores · Esc release mouse</p>
+      <p class="help" data-i18n="help">WASD move · Space jump · Ctrl crouch · Mouse aim · Click shoot · R reload · M mute · Tab scores · Esc release mouse</p>
     </div>
   </div>
 

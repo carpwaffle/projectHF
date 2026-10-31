@@ -8,6 +8,15 @@ export const INTERP_DELAY = 100; // ms clients render remote players behind real
 export const PLAYER_RADIUS = 0.35;
 export const PLAYER_HEIGHT = 1.8;
 export const EYE_HEIGHT = 1.6;
+// Crouching (hold Ctrl): slower, lower (eyes, hitboxes, collision capsule)
+// and more accurate.
+export const CROUCH_SPEED = 0.5; // movement speed multiplier
+export const CROUCH_HEIGHT = 1.25; // collision capsule height
+export const CROUCH_EYE = 1.2; // (the head: 1.15 kneeling, 1.35 crouch-walking)
+export const CROUCH_SPREAD = 0.5; // spread multiplier (on the ground)
+export const CROUCH_TIME = 0.15; // seconds to go down or up (the eyes ease between)
+// crouch: 0 = standing .. 1 = crouched.
+export const eyeHeight = (crouch = 0) => EYE_HEIGHT + (CROUCH_EYE - EYE_HEIGHT) * crouch;
 export const MOVE_SPEED = 5.5;
 export const JUMP_SPEED = 7;
 export const GRAVITY = 20;
@@ -212,11 +221,11 @@ export function lookDir(yaw, pitch) {
 }
 
 // Shot spread for a player with `weapon` moving at `speed` (m/s), on the
-// ground or not, scoped or not.
-export function spreadFor(weapon, speed, onGround, scoped = false) {
+// ground or not, scoped or not, crouched (0..1) or not.
+export function spreadFor(weapon, speed, onGround, scoped = false, crouch = 0) {
   const s = (scoped && weapon.scoped) || weapon.spread;
   if (!onGround) return s.air;
-  return s.still + (s.move - s.still) * Math.min(1, speed / MOVE_SPEED);
+  return (s.still + (s.move - s.still) * Math.min(1, speed / MOVE_SPEED)) * (1 + (CROUCH_SPREAD - 1) * crouch);
 }
 
 // A random direction within `spread` radians of `dir` (uniform over the cone's disc).
@@ -245,7 +254,10 @@ export function normalize(v) {
 // the hips), sits to the right with the long guns (cheek on the stock), and
 // leans with the movement. Measured from the animations in the preview
 // (within ~3 cm over the whole pitch range).
-// pose: { yaw, pitch, weapon (index into WEAPONS), vel:[x,y,z], skin };
+// Crouched (pose.crouch: 0..1, blended), the same model with the crouch
+// clips' numbers (CROUCH_STYLE, fitted within ~1 cm) and the chest box up to
+// the head.
+// pose: { yaw, pitch, weapon (index into WEAPONS), vel:[x,y,z], skin, crouch };
 // without it, the head is straight above the feet.
 const HEAD_BOTTOM = 1.45; // (chest box top)
 const CHEST_BOTTOM = 0.95; // (legs box top)
@@ -263,27 +275,41 @@ const HEAD_STYLE = {
   rifle: { side: 0.14, fwd: [-0.06, -0.08, 0.15], back: [-0.07, -0.02, -0.15], left: [-0.12, -0.01, -0.02], right: [0.17, -0.08, -0.08] },
   pistol: { side: 0, fwd: [0.02, -0.03, 0.11], back: [0.07, -0.06, 0.14], left: [0, -0.08, 0.08], right: [0.01, -0.08, 0.02] },
 };
-export function headCenter(pos, pose) {
-  if (!pose) return [pos[0], pos[1] + (HEAD_BOTTOM + PLAYER_HEIGHT) / 2, pos[2]];
-  const style = HEAD_STYLE[PISTOL_HOLD.has(WEAPONS[pose.weapon]?.id) ? 'pistol' : 'rifle'];
-  const angle = HEAD_TILT - HEAD_PITCH_FOLLOW * (pose.pitch ?? 0);
-  let right = style.side;
-  let up = HEAD_PIVOT[1] + HEAD_ARM * Math.cos(angle);
-  let forward = HEAD_PIVOT[0] + HEAD_ARM * Math.sin(angle);
-  const sin = Math.sin(pose.yaw ?? 0);
-  const cos = Math.cos(pose.yaw ?? 0);
+// Crouched, per holding style: arm, tilt and follow as above, the pivot
+// ([up, forward]; lower kneeling when still, higher crouch-walking); leans
+// at full crouch speed.
+const CROUCH_STYLE = {
+  rifle: { arm: 0.6, tilt: 0.3, follow: 0.57, side: 0.14, pivot: [0.62, 0.04], fwd: [0.02, 0.21, 0.09], back: [0.02, 0.2, 0.09], left: [0.03, 0.22, 0.06], right: [0.02, 0.22, 0.06] },
+  pistol: { arm: 0.61, tilt: 0.3, follow: 0.58, side: -0.02, pivot: [0.63, 0.04], fwd: [0.02, 0.21, 0.09], back: [0.02, 0.21, 0.09], left: [0.03, 0.22, 0.06], right: [0.02, 0.22, 0.06] },
+};
+// [right, up, forward] of the head in the player's frame: standing or crouched.
+function headOffset(pose, sin, cos, crouched) {
+  const style = (crouched ? CROUCH_STYLE : HEAD_STYLE)[PISTOL_HOLD.has(WEAPONS[pose.weapon]?.id) ? 'pistol' : 'rifle'];
+  const { arm, tilt, follow } = crouched ? style : { arm: HEAD_ARM, tilt: HEAD_TILT, follow: HEAD_PITCH_FOLLOW };
+  const [pivotUp, pivotForward] = crouched ? style.pivot : [HEAD_PIVOT[1], HEAD_PIVOT[0]];
+  const angle = tilt - follow * (pose.pitch ?? 0);
+  const o = [style.side, pivotUp + arm * Math.cos(angle), pivotForward + arm * Math.sin(angle)];
   if (pose.vel) {
     // Movement in the player's frame, as fractions of full speed.
-    let f = (-sin * pose.vel[0] - cos * pose.vel[2]) / MOVE_SPEED;
-    let r = (cos * pose.vel[0] - sin * pose.vel[2]) / MOVE_SPEED;
+    const full = MOVE_SPEED * (crouched ? CROUCH_SPEED : 1);
+    let f = (-sin * pose.vel[0] - cos * pose.vel[2]) / full;
+    let r = (cos * pose.vel[0] - sin * pose.vel[2]) / full;
     const len = Math.hypot(f, r);
     if (len > 1) { f /= len; r /= len; }
     for (const [k, lean] of [[Math.max(f, 0), style.fwd], [Math.max(-f, 0), style.back], [Math.max(r, 0), style.right], [Math.max(-r, 0), style.left]]) {
-      right += lean[0] * k;
-      up += lean[1] * k;
-      forward += lean[2] * k;
+      for (let i = 0; i < 3; i++) o[i] += lean[i] * k;
     }
   }
+  return o;
+}
+export function headCenter(pos, pose) {
+  if (!pose) return [pos[0], pos[1] + (HEAD_BOTTOM + PLAYER_HEIGHT) / 2, pos[2]];
+  const sin = Math.sin(pose.yaw ?? 0);
+  const cos = Math.cos(pose.yaw ?? 0);
+  const c = Math.min(1, Math.max(0, Number(pose.crouch) || 0));
+  const stand = c < 1 ? headOffset(pose, sin, cos, false) : null;
+  const low = c > 0 ? headOffset(pose, sin, cos, true) : null;
+  let [right, up, forward] = !low ? stand : !stand ? low : stand.map((v, i) => v + (low[i] - v) * c);
   const scale = pose.skin >= FEMALE_SKIN ? FEMALE_SCALE : 1;
   right *= scale;
   up *= scale;
@@ -296,15 +322,20 @@ export function headAABB(pos, pose) {
   const [a, h] = HEAD_HALF;
   return { min: [c[0] - a, c[1] - h, c[2] - a], max: [c[0] + a, c[1] + h, c[2] + a] };
 }
-// The body: [legs, chest].
+// The body: [legs, chest]. Crouched, the legs box is lower and the chest
+// box goes up to the head.
+const CROUCH_CHEST_BOTTOM = 0.5;
 export function bodyAABBs(pos, pose) {
   const head = headCenter(pos, pose);
   const x = (pos[0] + head[0]) / 2;
   const z = (pos[2] + head[2]) / 2;
   const r = PLAYER_RADIUS;
+  const c = Math.min(1, Math.max(0, Number(pose?.crouch) || 0));
+  const chestBottom = CHEST_BOTTOM + (CROUCH_CHEST_BOTTOM - CHEST_BOTTOM) * c;
+  const chestTop = HEAD_BOTTOM + (head[1] - pos[1] - HEAD_HALF[1] - HEAD_BOTTOM) * c;
   return [
-    { min: [pos[0] - r, pos[1], pos[2] - r], max: [pos[0] + r, pos[1] + CHEST_BOTTOM, pos[2] + r] },
-    { min: [x - r, pos[1] + CHEST_BOTTOM, z - r], max: [x + r, pos[1] + HEAD_BOTTOM, z + r] },
+    { min: [pos[0] - r, pos[1], pos[2] - r], max: [pos[0] + r, pos[1] + chestBottom, pos[2] + r] },
+    { min: [x - r, pos[1] + chestBottom, z - r], max: [x + r, pos[1] + chestTop, z + r] },
   ];
 }
 

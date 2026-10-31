@@ -7,7 +7,7 @@
 
 import * as THREE from 'three';
 import { MeshBVH } from 'three-mesh-bvh';
-import { GRAVITY, JUMP_SPEED, MOVE_SPEED, PLAYER_HEIGHT, PLAYER_RADIUS, FLY_SPEED, FLY_MAX_Y } from './shared.js';
+import { GRAVITY, JUMP_SPEED, MOVE_SPEED, PLAYER_HEIGHT, PLAYER_RADIUS, FLY_SPEED, FLY_MAX_Y, CROUCH_HEIGHT, CROUCH_SPEED } from './shared.js';
 
 const SUBSTEP = 1 / 120; // small steps so fast movement can't tunnel through thin walls
 const WALKABLE = 0.6; // surfaces whose normal.y is above this can be stood on (~53°)
@@ -53,11 +53,14 @@ export class World {
     this.playRadius = meta.playRadius;
   }
 
-  // player: { pos:[x,y,z], vel:[x,y,z], onGround }
+  // player: { pos:[x,y,z], vel:[x,y,z], onGround, crouched }
   // input:  { forward:-1..1, right:-1..1, jump:bool, yaw,
   //           speed (multiplier, default 1), fly (-1..1: fly hack up / down; undefined: no fly),
-  //           noclip (bool: through walls and ceilings, still standing on floors) }
+  //           noclip (bool: through walls and ceilings, still standing on floors),
+  //           crouch (bool: held; standing up again waits for headroom) }
   stepPlayer(player, input, dt) {
+    if (input.crouch) player.crouched = true;
+    else if (player.crouched && (input.noclip || this.canStand(player.pos))) player.crouched = false;
     const sin = Math.sin(input.yaw);
     const cos = Math.cos(input.yaw);
     let mx = -sin * input.forward + cos * input.right;
@@ -67,7 +70,7 @@ export class World {
       mx /= len;
       mz /= len;
     }
-    const speed = MOVE_SPEED * (input.speed ?? 1);
+    const speed = MOVE_SPEED * (input.speed ?? 1) * (player.crouched ? CROUCH_SPEED : 1);
     player.vel[0] = mx * speed;
     player.vel[2] = mz * speed;
     if (input.fly !== undefined) {
@@ -127,7 +130,8 @@ export class World {
     // or not near them (respawned, teleported).
     let g = player.onGround && !flying ? player.groundY : undefined;
     if (player.onGround && !flying && (g === undefined || pos[1] - g < -0.05 || pos[1] - g > STEP_HEIGHT + 0.01)) g = pos[1];
-    const hit = this.collide(pos[0] + vel[0] * h, pos[1] + vel[1] * h, pos[2] + vel[2] * h, g ?? pos[1]);
+    const height = player.crouched ? CROUCH_HEIGHT : PLAYER_HEIGHT;
+    const hit = this.collide(pos[0] + vel[0] * h, pos[1] + vel[1] * h, pos[2] + vel[2] * h, g ?? pos[1], height);
     player.groundY = hit.onFloor ? hit.y : hit.grounded ? g ?? hit.y : undefined;
 
     pos[0] = hit.x;
@@ -146,11 +150,12 @@ export class World {
   // The player's capsule with its feet at (x, y, z), pushed out of the map:
   // where it ends up, whether it stands on something (grounded; onFloor: on
   // a floor or slope, not just an edge) or hit a ceiling. ref: the feet
-  // height that ledges are measured from.
-  collide(x, y, z, ref = y) {
+  // height that ledges are measured from; height: the capsule's (crouched:
+  // lower).
+  collide(x, y, z, ref = y, height = PLAYER_HEIGHT) {
     const r = PLAYER_RADIUS;
     seg.start.set(x, y + r, z);
-    seg.end.copy(seg.start).y += PLAYER_HEIGHT - 2 * r;
+    seg.end.copy(seg.start).y += height - 2 * r;
     box.makeEmpty().expandByPoint(seg.start).expandByPoint(seg.end).expandByScalar(r);
 
     let grounded = false;
@@ -198,6 +203,19 @@ export class World {
       },
     });
     return { x: seg.start.x, y: seg.start.y - r, z: seg.start.z, grounded, onFloor, ceiling };
+  }
+
+  // Room to stand up with the feet at pos: nothing in the part of the
+  // standing capsule above the crouched one (walls we lean on don't count).
+  canStand(pos) {
+    const r = PLAYER_RADIUS;
+    seg.start.set(pos[0], pos[1] + CROUCH_HEIGHT - r, pos[2]);
+    seg.end.set(pos[0], pos[1] + PLAYER_HEIGHT - r, pos[2]);
+    box.makeEmpty().expandByPoint(seg.start).expandByPoint(seg.end).expandByScalar(r);
+    return !this.bvh.shapecast({
+      intersectsBounds: (b) => b.intersectsBox(box),
+      intersectsTriangle: (tri) => tri.closestPointToSegment(seg, triPoint, capPoint) < r - 0.02,
+    });
   }
 
   // Safety net: stay inside the arena, never fall through the world.
@@ -252,8 +270,12 @@ const edgeKey = (ax, ay, az, bx, by, bz) => {
 
 // The edges shared by two triangles in the same plane (see edgeAt).
 function flatEdges(chunks) {
-  const normals = new Map(); // edge key -> normal of the first triangle with it
-  const flat = new Set();
+  // Flat: the triangles on the edge are all in one plane, apart from hidden
+  // faces (pairs back to back: where two wall boxes meet end to end). Not
+  // when an exposed face meets them at an angle: a wall's corner where its
+  // end face continues in the plane of another wall (ignoring that edge let
+  // players cut into the corner, and they couldn't stand up from a crouch).
+  const normals = new Map(); // edge key -> normals of the triangles on it
   const tri = new THREE.Triangle();
   const n = new THREE.Vector3();
   for (const c of chunks) {
@@ -264,11 +286,17 @@ function flatEdges(chunks) {
       tri.getNormal(n);
       for (const [a, b] of [[tri.a, tri.b], [tri.b, tri.c], [tri.c, tri.a]]) {
         const key = edgeKey(a.x, a.y, a.z, b.x, b.y, b.z);
-        const other = normals.get(key);
-        if (!other) normals.set(key, n.clone());
-        else if (Math.abs(other.dot(n)) > 0.999) flat.add(key);
+        const list = normals.get(key);
+        if (list) list.push(n.clone());
+        else normals.set(key, [n.clone()]);
       }
     }
+  }
+  const flat = new Set();
+  for (const [key, list] of normals) {
+    if (list.length < 2) continue;
+    const exposed = list.filter((m) => !list.some((o) => o.dot(m) < -0.999));
+    if (exposed.every((m) => Math.abs(m.dot(exposed[0])) > 0.999)) flat.add(key);
   }
   return flat;
 }

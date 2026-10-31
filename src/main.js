@@ -3,7 +3,7 @@
 // the `send` function differs.
 
 import {
-  STATE_SEND_RATE, INTERP_DELAY, EYE_HEIGHT, MAX_HP, MOVE_SPEED, HOST_TIMEOUT,
+  STATE_SEND_RATE, INTERP_DELAY, eyeHeight, CROUCH_TIME, MAX_HP, MOVE_SPEED, HOST_TIMEOUT,
   MAX_RANGE, TEAMS, WEAPONS, DEFAULT_WEAPON, SWITCH_TIME, RESPAWN_TIME, SPAWN_PROTECTION,
   ADMIN_NAME, PICKUP_SPOTS, HACKS, hasHack, HACK_LIMIT, hackCount, withinHackLimit, hackList, hacksPrice, SPEED_HACK, FLY_HACK_SPEED, RECOIL_HACK, fireCooldown, headAABB, lookDir, rayPlayer, spreadFor, spreadDir,
 } from './shared.js';
@@ -14,6 +14,7 @@ import { loadAssets, loadMap } from './assets.js';
 import { World } from './world.js';
 import { unlockAudio, playSound, setListener, toggleMute, audioDebug } from './audio.js';
 import { Minimap } from './minimap.js';
+import { t, lang, setLang, LANGUAGES, applyPageText, teamName, weaponName, hackName, hackShort, hackDesc } from './i18n.js';
 
 const $ = (id) => document.getElementById(id);
 const canvas = $('view');
@@ -21,10 +22,47 @@ const canvas = $('view');
 const renderer = new Renderer(canvas);
 renderer.onSound = playSound;
 
+// ---- language ---------------------------------------------------------------
+// The main menu's English / 한국어 switch (remembered in this browser).
+
+let status = null; // the menu's status line: { key, params, err } (shown in the current language)
+function setStatus(key, params) {
+  status = key ? { key, params } : null;
+  showStatus();
+}
+// An error: on its own, or as key's {error}.
+function setStatusError(err, key) {
+  status = { key, err };
+  showStatus();
+}
+// An error's message: its key (net.js) or, failing that, its own text.
+const errorText = (err) => (err.i18n ? t(err.i18n, err.params) : err.message);
+function showStatus() {
+  if (!status) $('status').textContent = '';
+  else if (!status.err) $('status').textContent = t(status.key, status.params);
+  else $('status').textContent = status.key ? t(status.key, { error: errorText(status.err) }) : errorText(status.err);
+}
+
+function showLanguage() {
+  applyPageText();
+  $('hackMode').options[0].textContent = t('mode.limit', { n: HACK_LIMIT });
+  for (const b of $('langSwitch').children) b.classList.toggle('on', b.dataset.lang === lang);
+  showStatus();
+}
+for (const [code, label] of Object.entries(LANGUAGES)) {
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.dataset.lang = code;
+  b.textContent = label;
+  b.addEventListener('click', () => { setLang(code); showLanguage(); });
+  $('langSwitch').appendChild(b);
+}
+showLanguage();
+
 // Models must be loaded before the game can start.
 $('hostBtn').disabled = true;
 $('joinBtn').disabled = true;
-$('status').textContent = 'Loading models…';
+setStatus('status.loading');
 let world;
 const minimap = new Minimap($('minimap'), () => world, renderer);
 try {
@@ -32,11 +70,11 @@ try {
   world = new World(map.collision, map.meta);
   renderer.setMap(map.visual, map.lightmap, map.meta.lightmap?.intensity);
 } catch (err) {
-  $('status').textContent = `Could not load models: ${err.message}`;
+  setStatusError(err, 'status.loadFailed');
   throw err;
 }
 renderer.buildGun();
-$('status').textContent = '';
+setStatus(null);
 $('hostBtn').disabled = false;
 $('joinBtn').disabled = false;
 
@@ -45,7 +83,7 @@ $('joinBtn').disabled = false;
 let session = null; // { send(msg, reliable), close(), code, isHost }
 let myId = null;
 let myTeam = 0;
-let roomLabel = '';
+let room = { code: '', hosting: false }; // the room we're in (for the HUD's room line)
 const me = {
   pos: [0, 0, 0], vel: [0, 0, 0], onGround: true, yaw: 0, pitch: 0, hp: MAX_HP, dead: false,
   money: 0,
@@ -56,6 +94,8 @@ const me = {
   switchEnd: 0, // performance.now() ms when the weapon switch finishes
   scope: 0, // 0 = not scoped .. 1 = fully scoped
   spread: 0, // current shot spread (radians), follows movement
+  crouched: false, // (hold Ctrl; set by World.stepPlayer: stays down until there's room to stand)
+  crouch: 0, // 0 = standing .. 1 = crouched, eased over CROUCH_TIME (the eyes)
   protectedUntil: 0, // performance.now() ms; spawn protection (for the HUD; the host enforces it)
 };
 let deathInfo = null; // { killer, headshot, at } while dead
@@ -79,9 +119,10 @@ const BASE_FOV = renderer.camera.fov;
 
 window.addEventListener('keydown', (e) => {
   keys.add(e.code);
+  if (e.ctrlKey && locked()) e.preventDefault(); // (Ctrl: crouch; not the browser's Ctrl shortcuts)
   if (e.code === 'Tab' && session) { e.preventDefault(); $('scoreboard').hidden = false; }
   if (e.code === 'KeyR' && session && locked()) startReload(performance.now());
-  if (e.code === 'KeyM' && session) addFeed(toggleMute() ? 'Sound off (M)' : 'Sound on (M)');
+  if (e.code === 'KeyM' && session) addFeed(t(toggleMute() ? 'feed.soundOff' : 'feed.soundOn'));
   // Weapon switching (number keys, wheel): only for the player named "Admin".
   // (Q / E: the fly hack.)
   if (session && locked() && isAdmin()) {
@@ -132,6 +173,7 @@ function readMoveInput() {
     speed: speedHack(),
     fly: has('fly') ? k('KeyQ') - k('KeyE') : undefined,
     noclip: has('noclip'),
+    crouch: !!(k('ControlLeft') || k('ControlRight')),
   };
 }
 
@@ -202,7 +244,7 @@ function onMessage(msg) {
       break;
     case 'earn':
       me.money = msg.money;
-      addFeed(`+$${msg.amount} for the kill`);
+      addFeed(t('feed.killReward', { n: msg.amount }));
       break;
     case 'victory':
       showVictory(msg);
@@ -230,27 +272,27 @@ function onMessage(msg) {
       me.reloadEnd = 0;
       me.switchEnd = now + SWITCH_TIME * 1000;
       me.scope = 0;
-      addFeed(`Picked up ${WEAPONS[msg.w].name}`);
+      addFeed(t('feed.pickedUp', { weapon: weaponName(WEAPONS[msg.w]) }));
       playSound('pickup', null);
       break;
     }
     case 'cash': // we walked over a money spot
       me.money = msg.money;
       flash('cash', 300);
-      addFeed(`+$${msg.amount}`);
+      addFeed(t('feed.cash', { n: msg.amount }));
       playSound('pickup', null);
       break;
     case 'heal': // we walked over a heal pack
       me.hp = msg.hp;
       flash('heal', 300);
-      addFeed('Healed');
+      addFeed(t('feed.healed'));
       playSound('pickup', null);
       break;
     case 'leave':
       renderer.removeAvatar(msg.id);
       break;
     case 'feed':
-      addFeed(msg.text);
+      addFeed(feedText(msg));
       break;
   }
 }
@@ -261,7 +303,10 @@ function teleport(pos, yaw) {
   me.vel = [0, 0, 0];
   me.yaw = yaw ?? Math.atan2(pos[0], pos[2]);
   me.pitch = 0;
+  me.crouched = false;
+  me.crouch = 0;
 }
+const myEye = () => [me.pos[0], me.pos[1] + eyeHeight(me.crouch), me.pos[2]];
 
 // ---- shooting --------------------------------------------------------------
 
@@ -325,7 +370,7 @@ function tryShoot(now) {
   // Draw the tracer immediately against what we currently see, so shooting
   // feels responsive. The host decides whether it actually hit. The spread
   // is applied here so the tracer shows where the shot really goes.
-  const origin = [me.pos[0], me.pos[1] + EYE_HEIGHT, me.pos[2]];
+  const origin = myEye();
   const aim = spreadDir(lookDir(me.yaw, me.pitch), me.spread);
   // Shotgun: several pellets in a cone around the aimed direction.
   const dirs = w.pellets ? Array.from({ length: w.pellets }, () => spreadDir(aim, w.pelletSpread)) : [aim];
@@ -395,6 +440,7 @@ function renderRemotePlayers(now, dt) {
       yaw: lerpAngle(pa.yaw, pb.yaw, t),
       pitch: pa.pitch + (pb.pitch - pa.pitch) * t,
       dead: pb.dead,
+      crouch: !!pb.c,
       reloading: !!pb.rl,
       protected: !!pb.sp,
       weapon: pb.w ?? 0,
@@ -413,6 +459,18 @@ function flash(id, ms) {
   flashTimers[id] = setTimeout(() => el.classList.remove('show'), ms);
 }
 
+// A feed message from the host: a key and its values, in our language.
+function feedText(msg) {
+  switch (msg.key) {
+    case 'joined': return t('feed.joined', { name: msg.name, team: teamName(msg.team) });
+    case 'left': return t('feed.left', { name: msg.name });
+    case 'kill': return t(msg.hs ? 'feed.killHeadshot' : 'feed.kill', { killer: msg.killer, victim: msg.victim });
+    case 'victory': return t('feed.victory', { name: msg.name, team: teamName(msg.team) });
+    case 'noBots': return t('feed.noBots');
+    default: return msg.text ?? '';
+  }
+}
+
 function addFeed(text) {
   const div = document.createElement('div');
   div.textContent = text;
@@ -422,49 +480,50 @@ function addFeed(text) {
 
 // Team score = the team's total kills.
 function updateScoreboard() {
-  const totals = TEAMS.map((_, t) => latestPlayers.filter((p) => p.team === t).reduce((n, p) => n + p.score, 0));
+  const totals = TEAMS.map((_, i) => latestPlayers.filter((p) => p.team === i).reduce((n, p) => n + p.score, 0));
   const teamScore = $('teamScore');
   teamScore.replaceChildren();
-  TEAMS.forEach((team, t) => {
+  TEAMS.forEach((team, i) => {
     const span = document.createElement('span');
-    span.textContent = `${team.name} ${totals[t]}`;
+    span.textContent = `${teamName(i)} ${totals[i]}`;
     span.style.color = team.color;
-    if (t === myTeam) span.className = 'mine';
+    if (i === myTeam) span.className = 'mine';
     teamScore.appendChild(span);
   });
 
   const table = $('scoreboard');
   table.replaceChildren();
   const header = table.insertRow();
-  for (const h of ['Team', 'Player', 'Kills', 'Money', 'Hacks']) {
+  for (const h of ['team', 'player', 'kills', 'money', 'hacks']) {
     const th = document.createElement('th');
-    th.textContent = h;
+    th.textContent = t(`board.${h}`);
     header.appendChild(th);
   }
   for (const p of [...latestPlayers].sort((x, y) => x.team - y.team || y.score - x.score)) {
     const row = table.insertRow();
     if (p.id === myId) row.className = 'me';
     const team = row.insertCell();
-    team.textContent = TEAMS[p.team]?.name ?? '';
+    team.textContent = TEAMS[p.team] ? teamName(p.team) : '';
     team.style.color = TEAMS[p.team]?.color ?? '';
     row.insertCell().textContent = p.name;
     row.insertCell().textContent = p.score;
     row.insertCell().textContent = `$${p.m ?? 0}`;
     // Hacks: only teammates' (the host doesn't send the other team's).
-    row.insertCell().textContent = p.h === undefined ? '' : p.h ? hackList(p.h).map((h) => h.name.replace(/ hack$/, '')).join(', ') : '-';
+    row.insertCell().textContent = p.h === undefined ? '' : p.h ? hackList(p.h).map(hackShort).join(', ') : '-';
   }
 }
 
 function showRoomInfo() {
   const info = $('roomInfo');
-  info.textContent = myId ? `${roomLabel} · ${hackLimit ? `Up to ${hackLimit} hacks` : 'No limit'} · You are ${TEAMS[myTeam].name}` : roomLabel;
+  const label = t(room.hosting ? 'room.hosting' : 'room.joined', { code: room.code });
+  info.textContent = myId ? `${label} · ${hackLimit ? t('room.limit', { n: hackLimit }) : t('room.noLimit')} · ${t('room.team', { team: teamName(myTeam) })}` : label;
   info.style.borderLeft = myId ? `4px solid ${TEAMS[myTeam].color}` : '';
 }
 
 const isAdmin = () => nameOf(myId) === ADMIN_NAME;
 
 function nameOf(id) {
-  return latestPlayers.find((p) => p.id === id)?.name ?? 'someone';
+  return latestPlayers.find((p) => p.id === id)?.name ?? t('hud.someone');
 }
 
 // kind: 'body' | 'head' (gold) | 'kill' (big red) | 'blocked' (grey: spawn-protected)
@@ -477,7 +536,7 @@ function showHitmarker(kind) {
 
 function showKillConfirm(name, headshot) {
   const el = $('killConfirm');
-  el.textContent = `Eliminated ${name}${headshot ? ' · headshot' : ''}`;
+  el.textContent = t('hud.eliminated', { name }) + (headshot ? ` · ${t('hud.headshot')}` : '');
   flash('killConfirm', 1600);
 }
 
@@ -518,12 +577,12 @@ function updateCrosshair() {
 function updateHud(now) {
   $('hp').textContent = me.hp;
   $('weaponName').textContent = isAdmin()
-    ? WEAPONS.map((w, i) => (i === me.weapon ? `[${i + 1}] ${w.name}` : `${i + 1}`)).join('  ')
-    : WEAPONS[me.weapon].name;
+    ? WEAPONS.map((w, i) => (i === me.weapon ? `[${i + 1}] ${weaponName(w)}` : `${i + 1}`)).join('  ')
+    : weaponName(WEAPONS[me.weapon]);
   $('ammoCount').textContent = has('ammo') ? '∞' : me.ammo[me.weapon];
   $('magSize').textContent = weapon().magSize;
   $('ammo').classList.toggle('empty', me.ammo[me.weapon] === 0 && !has('ammo'));
-  $('hackName').textContent = me.hack && !me.dead ? hackList(me.hack).map((h) => h.name).join(' · ') : '';
+  $('hackName').textContent = me.hack && !me.dead ? hackList(me.hack).map(hackName).join(' · ') : '';
   minimap.update(has('map') && !me.dead, me, myTeam);
   renderer.wallHack = has('wall') && !me.dead;
   updateVictory(now);
@@ -539,19 +598,25 @@ function updateHud(now) {
     const left = deathInfo ? Math.max(0, RESPAWN_TIME - (now - deathInfo.at) / 1000) : null;
     $('deadMsg').innerHTML = '';
     const title = document.createElement('div');
-    title.textContent = deathInfo ? `Killed by ${deathInfo.killer}${deathInfo.headshot ? ' · headshot' : ''}` : 'You died';
+    title.textContent = killedText();
     const sub = document.createElement('div');
     sub.className = 'sub';
-    sub.textContent = left === null ? 'Respawning…' : `Respawning in ${left.toFixed(1)}`;
+    sub.textContent = left === null ? t('hud.respawning') : t('hud.respawningIn', { s: left.toFixed(1) });
     $('deadMsg').append(title, sub);
   }
 
   const protectedLeft = me.dead ? 0 : (me.protectedUntil - now) / 1000;
   $('protectMsg').hidden = protectedLeft <= 0;
-  if (protectedLeft > 0) $('protectMsg').textContent = `Spawn protection ${protectedLeft.toFixed(1)}`;
+  if (protectedLeft > 0) $('protectMsg').textContent = t('hud.protection', { s: protectedLeft.toFixed(1) });
 
   updateDamageDirs(now);
   updateCrosshair();
+}
+
+// "Killed by X · headshot", or "You died".
+function killedText() {
+  if (!deathInfo) return t('hud.died');
+  return t('hud.killedBy', { name: deathInfo.killer }) + (deathInfo.headshot ? ` · ${t('hud.headshot')}` : '');
 }
 
 // ---- buy menu --------------------------------------------------------------
@@ -584,7 +649,7 @@ function buyOptions(items, group, onPick, type = 'radio') {
     }
     const price = document.createElement('span');
     price.className = 'price';
-    price.textContent = item.price ? `$${item.price.toLocaleString()}` : 'Free';
+    price.textContent = item.price ? `$${item.price.toLocaleString()}` : t('buy.free');
     label.append(input, name, price);
     return label;
   });
@@ -600,18 +665,19 @@ function openBuyMenu(msg) {
   info.replaceChildren();
   if (msg.earned !== undefined) {
     const killed = document.createElement('div');
-    killed.textContent = deathInfo ? `Killed by ${deathInfo.killer}${deathInfo.headshot ? ' · headshot' : ''}` : 'You died';
+    killed.textContent = killedText();
     const earned = document.createElement('div');
     earned.className = 'earned';
-    earned.textContent = `Survived ${msg.alive} s: +$${msg.earned}`;
+    earned.textContent = t('buy.survived', { s: msg.alive, n: msg.earned });
     info.append(killed, earned);
   } else {
-    const hacks = hackLimit ? `up to ${hackLimit} hacks` : 'any hacks';
-    info.textContent = msg.round ? `New round! Pick a weapon and ${hacks}.` : `Pick a weapon and ${hacks} to start with.`;
+    info.textContent = t(`buy.${msg.round ? 'newRound' : 'start'}${hackLimit ? 'Limit' : 'Any'}`, { n: hackLimit });
   }
-  $('buyHacksMode').textContent = hackLimit ? `(up to ${hackLimit})` : '(any number)';
-  $('buyList').replaceChildren(...buyOptions(WEAPONS, 'buyWeapon', (i) => { buyChoice = i; }));
-  $('buyHacks').replaceChildren(...buyOptions(HACKS, 'buyHack', (i, on) => {
+  $('buyHacksMode').textContent = hackLimit ? t('buy.upTo', { n: hackLimit }) : t('buy.anyNumber');
+  const weapons = WEAPONS.map((w) => ({ name: weaponName(w), price: w.price }));
+  const hacks = HACKS.map((h) => ({ name: hackName(h), desc: hackDesc(h), price: h.price }));
+  $('buyList').replaceChildren(...buyOptions(weapons, 'buyWeapon', (i) => { buyChoice = i; }));
+  $('buyHacks').replaceChildren(...buyOptions(hacks, 'buyHack', (i, on) => {
     if (on && !withinHackLimit(buyHacks | (1 << i), hackLimit)) return; // (locked next frame)
     buyHacks = on ? buyHacks | (1 << i) : buyHacks & ~(1 << i);
   }, 'checkbox'));
@@ -655,12 +721,12 @@ function updateBuyMenu(now) {
   mark($('buyList'), WEAPONS, (i) => i === buyChoice, hackPrice);
   mark($('buyHacks'), HACKS, (i) => (buyHacks & (1 << i)) !== 0, weaponPrice + hackPrice, full);
   const total = weaponPrice + hackPrice;
-  $('buyTotal').textContent = `Total $${total.toLocaleString()}`;
+  $('buyTotal').textContent = t('buy.total', { n: total.toLocaleString() });
   $('buyTotal').classList.toggle('over', total > me.money);
   const start = $('buyStart');
   const wait = (buy.readyAt - now) / 1000;
   start.disabled = buy.sent || wait > 0 || total > me.money;
-  start.textContent = buy.sent ? 'Spawning…' : wait > 0 ? `Start in ${wait.toFixed(1)}` : 'Start';
+  start.textContent = buy.sent ? t('buy.spawning') : wait > 0 ? t('buy.startIn', { s: wait.toFixed(1) }) : t('buy.start');
 }
 
 $('buyStart').addEventListener('click', () => {
@@ -703,10 +769,10 @@ function showVictory(msg) {
   el.replaceChildren();
   const title = document.createElement('div');
   title.className = 'title';
-  title.textContent = `${team.name} wins!`;
+  title.textContent = t('victory.wins', { team: teamName(msg.team) });
   title.style.color = team.color;
   const by = document.createElement('div');
-  by.textContent = `${msg.by} bought the Victory hack`;
+  by.textContent = t('victory.by', { name: msg.by });
   const next = document.createElement('div');
   next.className = 'next';
   el.append(title, by, next);
@@ -719,7 +785,7 @@ function updateVictory(now) {
   if (el.hidden) return;
   const left = (victoryUntil - now) / 1000;
   if (left <= -1 || buy) { el.hidden = true; return; } // (the new round's buy menu is up)
-  el.querySelector('.next').textContent = `Next round in ${Math.max(0, Math.ceil(left))}`;
+  el.querySelector('.next').textContent = t('victory.next', { s: Math.max(0, Math.ceil(left)) });
 }
 
 // ---- aim hack ---------------------------------------------------------------
@@ -730,7 +796,7 @@ function updateVictory(now) {
 
 const _head = [0, 0, 0];
 function aimLock() {
-  const eye = [me.pos[0], me.pos[1] + EYE_HEIGHT, me.pos[2]];
+  const eye = myEye();
   const view = lookDir(me.yaw, me.pitch);
   const halfFov = (renderer.camera.fov / 2) * (Math.PI / 180);
   const limit = Math.atan(Math.tan(halfFov) * Math.hypot(1, renderer.camera.aspect)); // to the screen's corners
@@ -765,6 +831,8 @@ function frame(now) {
 
   if (session && myId) {
     if (!me.dead) world.stepPlayer(me, readMoveInput(), dt);
+    if (me.dead) me.crouched = false;
+    me.crouch = me.crouched ? Math.min(1, me.crouch + dt / CROUCH_TIME) : Math.max(0, me.crouch - dt / CROUCH_TIME);
     updateReload(now);
     updateScope(dt, now);
     if (has('aim') && (keys.has('ShiftLeft') || keys.has('ShiftRight')) && locked() && !me.dead) aimLock();
@@ -772,13 +840,14 @@ function frame(now) {
 
     if (!me.dead && now - lastStateSent >= 1000 / STATE_SEND_RATE) {
       lastStateSent = now;
-      session.send({ t: 'state', p: me.pos, yaw: me.yaw, pitch: me.pitch }, false);
+      session.send({ t: 'state', p: me.pos, yaw: me.yaw, pitch: me.pitch, c: me.crouched ? 1 : 0 }, false);
     }
 
     // Spread eases toward what the current movement allows.
-    // (Flying counts as standing on the ground; the recoil hack cuts it 85%.)
+    // (Flying counts as standing on the ground; crouching halves it; the
+    // recoil hack cuts it 85%.)
     const speed = Math.hypot(me.vel[0], me.vel[2]) / speedHack();
-    const target = spreadFor(weapon(), speed, me.onGround || has('fly'), me.scope > 0.95) * (has('recoil') ? RECOIL_HACK : 1);
+    const target = spreadFor(weapon(), speed, me.onGround || has('fly'), me.scope > 0.95, me.crouch) * (has('recoil') ? RECOIL_HACK : 1);
     me.spread += (target - me.spread) * (1 - Math.exp(-12 * dt));
 
     renderRemotePlayers(now, dt);
@@ -790,13 +859,14 @@ function frame(now) {
 
   renderer.gun.visible = !!session && !me.dead;
   if (session) {
-    const eye = [me.pos[0], me.pos[1] + EYE_HEIGHT, me.pos[2]];
+    const eye = myEye();
     renderer.updateViewmodel(dt, {
       pos: me.pos,
       yaw: me.yaw,
       pitch: me.pitch,
       vel: [me.vel[0], me.onGround ? 0 : me.vel[1], me.vel[2]],
       dead: me.dead,
+      crouch: me.crouched,
       reloading: !!me.reloadEnd,
       ground: me.onGround ? me.pos[1] : groundBelow(me.pos),
       weapon: me.weapon,
@@ -843,10 +913,6 @@ function playerName() {
   return $('name').value.trim() || 'Player';
 }
 
-function setStatus(text) {
-  $('status').textContent = text;
-}
-
 function setBusy(busy) {
   $('hostBtn').disabled = busy;
   $('joinBtn').disabled = busy;
@@ -855,8 +921,8 @@ function setBusy(busy) {
 function enterGame(code, isHost) {
   $('menu').hidden = true;
   $('hud').hidden = false;
-  setStatus('');
-  roomLabel = isHost ? `Hosting · Room code: ${code} · share this page's link with friends` : `Room ${code}`;
+  setStatus(null);
+  room = { code, hosting: isHost };
   showRoomInfo(); // (the host's own welcome has already arrived)
   // The room code in the address bar: the whole URL is the invite.
   history.replaceState(null, '', `${location.pathname}?room=${code}`);
@@ -900,13 +966,13 @@ function leaveGame(reason) {
   $('hud').hidden = true;
   $('menu').hidden = false;
   setBusy(false);
-  setStatus(reason ?? '');
+  setStatus(reason ?? null);
 }
 
 $('hostBtn').addEventListener('click', async () => {
   unlockAudio(); // (browsers allow audio only after a click)
   setBusy(true);
-  setStatus('Creating room…');
+  setStatus('status.creating');
   let peer;
   let code;
   for (let attempt = 0; attempt < 3 && !peer; attempt++) {
@@ -915,14 +981,14 @@ $('hostBtn').addEventListener('click', async () => {
       peer = await openHostPeer(code);
     } catch (err) {
       if (err.type !== 'unavailable-id') {
-        setStatus(`Could not host: ${err.message}`);
+        setStatusError(err, 'status.hostFailed');
         setBusy(false);
         return;
       }
     }
   }
   if (!peer) {
-    setStatus('Could not get a free room code, try again');
+    setStatus('status.noCode');
     setBusy(false);
     return;
   }
@@ -945,15 +1011,15 @@ $('hostBtn').addEventListener('click', async () => {
 $('joinBtn').addEventListener('click', async () => {
   unlockAudio();
   const code = $('codeInput').value.trim().toUpperCase();
-  if (code.length !== 5) return setStatus('Enter a 5-character room code');
+  if (code.length !== 5) return setStatus('status.enterCode');
   setBusy(true);
-  setStatus('Connecting…');
+  setStatus('status.connecting');
 
   let conn;
   try {
     conn = await joinRoom(code);
   } catch (err) {
-    setStatus(err.message);
+    setStatusError(err);
     setBusy(false);
     return;
   }
@@ -961,14 +1027,14 @@ $('joinBtn').addEventListener('click', async () => {
   const { peer, rel, state } = conn;
   rel.on('data', onMessage);
   state.on('data', onMessage);
-  const onLost = () => { if (session) leaveGame('Disconnected from host'); };
+  const onLost = () => { if (session) leaveGame('status.disconnected'); };
   rel.on('close', onLost);
   rel.on('error', onLost);
   // Heartbeat (the host drops silent players) and host watchdog.
   lastHostMessage = performance.now();
   const stopHeartbeat = startTicker(() => {
     if (rel.open) rel.send({ t: 'ping', at: performance.now() });
-    if (session && performance.now() - lastHostMessage > HOST_TIMEOUT * 1000) leaveGame('Lost connection to host');
+    if (session && performance.now() - lastHostMessage > HOST_TIMEOUT * 1000) leaveGame('status.lost');
   }, 1);
 
   session = {
@@ -998,6 +1064,6 @@ window.addEventListener('pagehide', () => { if (session) leaveGame(); });
   const invited = new URLSearchParams(location.search).get('room')?.trim().toUpperCase();
   if (invited && /^[A-Z0-9]{5}$/.test(invited)) {
     $('codeInput').value = invited;
-    setStatus(`Invited to room ${invited}: enter your name and press Join`);
+    setStatus('status.invited', { code: invited });
   }
 }

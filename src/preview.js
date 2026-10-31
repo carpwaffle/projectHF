@@ -7,7 +7,7 @@
 import * as THREE from 'three';
 import { Character } from './character.js';
 import { SKINS, loadAssets } from './assets.js';
-import { MOVE_SPEED, JUMP_SPEED, GRAVITY, EYE_HEIGHT, WEAPONS, headAABB, bodyAABBs } from './shared.js';
+import { MOVE_SPEED, JUMP_SPEED, GRAVITY, CROUCH_SPEED, eyeHeight, WEAPONS, headAABB, bodyAABBs } from './shared.js';
 
 const $ = (id) => document.getElementById(id);
 const canvas = $('view');
@@ -70,6 +70,7 @@ let firstPerson = false;
 let autoFire = false;
 let reloadEnd = 0; // performance.now() when the current reload ends (0: not reloading)
 let dead = false;
+let crouch = false;
 let spin = false;
 let showBoxes = false;
 let yaw = 0;
@@ -90,6 +91,7 @@ const weaponButtons = buttons('weapons', WEAPONS.map((w) => w.name), (i) => { we
 const moveButtons = buttons('moves', Object.keys(MOVES), (i, name) => { move = name; });
 $('jump').onclick = () => { if (y === 0 && !dead) vy = JUMP_SPEED; };
 $('fire').onclick = () => { autoFire = !autoFire; refresh(); };
+$('crouch').onclick = () => { crouch = !crouch; refresh(); };
 $('reload').onclick = () => { if (!dead) reloadEnd = performance.now() + WEAPONS[weapon].reloadTime * 1000; };
 $('die').onclick = () => { dead = !dead; reloadEnd = 0; refresh(); };
 $('spin').onclick = () => { spin = !spin; refresh(); };
@@ -108,6 +110,7 @@ function refresh() {
   weaponButtons.forEach((b, i) => b.classList.toggle('on', i === weapon));
   moveButtons.forEach((b) => b.classList.toggle('on', b.textContent === move));
   $('fire').classList.toggle('on', autoFire);
+  $('crouch').classList.toggle('on', crouch);
   $('die').textContent = dead ? 'Respawn' : 'Die';
   $('die').classList.toggle('on', dead);
   $('spin').classList.toggle('on', spin);
@@ -164,7 +167,7 @@ function frame(now) {
 
   // Body-frame movement → world velocity.
   const [f, r] = dead ? [0, 0] : MOVES[move];
-  const speed = MOVE_SPEED * Number($('speed').value);
+  const speed = MOVE_SPEED * Number($('speed').value) * (crouch ? CROUCH_SPEED : 1);
   const sin = Math.sin(yaw);
   const cos = Math.cos(yaw);
   const vx = (-sin * f + cos * r) * speed;
@@ -185,8 +188,8 @@ function frame(now) {
   }
 
   const pitch = Number($('pitch').value);
-  character.update(dt, { pos: [0, y, 0], yaw, pitch, dead, vel: [vx, vy, vz], weapon, reloading: !!reloadEnd, ground: 0 });
-  const pose = { yaw, pitch, weapon, vel: [vx, vy, vz], skin };
+  character.update(dt, { pos: [0, y, 0], yaw, pitch, dead, crouch, vel: [vx, vy, vz], weapon, reloading: !!reloadEnd, ground: 0 });
+  const pose = { yaw, pitch, weapon, vel: [vx, vy, vz], skin, crouch };
   [headAABB([0, y, 0], pose), ...bodyAABBs([0, y, 0], pose)].forEach((b, i) => {
     hitboxes[i].visible = showBoxes && !dead;
     hitboxes[i].position.set(...b.min.map((v, k) => (v + b.max[k]) / 2));
@@ -199,7 +202,7 @@ function frame(now) {
   if (firstPerson) {
     character.label.visible = false;
     character.shadow.visible = false;
-    camera.position.set(0, y + EYE_HEIGHT, 0);
+    camera.position.set(0, y + eyeHeight(crouch ? 1 : 0), 0);
     camera.rotation.set(pitch, yaw, 0);
     if (!dead) character.placeEyes(camera.position.toArray(), yaw, pitch);
   } else {

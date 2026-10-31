@@ -68,6 +68,7 @@ anti-cheat.
 | `src/config.js` | ICE servers (STUN/TURN) |
 | `src/host.js` | `HostServer`: the game server running in the host's tab |
 | `src/main.js` | Menu, input, local movement, interpolation, shooting, HUD, game loop |
+| `src/i18n.js` | Interface text (English, Korean), `t(key, params)`, the language setting |
 | `src/render.js` | Three.js scene, arena, first-person rifle (bob, sway, recoil, flash), tracers |
 | `src/character.js` | Animated player character from the model assets (see §11) |
 | `src/assets.js` | GLB loader and the list of character skins |
@@ -1866,3 +1867,138 @@ body), with the preview's pose.
   horizontally). `Character` now keeps its `name`.
 - Checked in Chrome with 7 bots: names readable; players standing together
   overlap.
+
+## 55. Crouching (2026-10-31)
+
+- Hold Ctrl (left or right) to crouch. Ctrl key combos are swallowed while
+  the mouse is captured (`preventDefault`), so e.g. Ctrl+D doesn't
+  bookmark. (Browsers don't let a page block Ctrl+W on Windows/Linux:
+  crouch + W there closes the tab unless the game is fullscreen. On macOS
+  Ctrl+W does nothing.)
+- Animations: 5 new Mixamo rifle clips in `fbx/Character Animation/`
+  (Crouch Idle, Crouch Walk Forward / Backward / Left / Right) converted
+  as `crouch_idle`, `crouch_forward` ... (`convert_assets.py` CLIPS;
+  `npm run build:anims`). One set for every gun: with the pistol the
+  pistol idle's upper body goes over them (the `pistol_fire` overlay at
+  full weight while crouched). `Character` eases `crouch` 0..1 and
+  cross-fades the standing and crouch sets; the crouch walks share the run
+  phase, at `CROUCH_ANIM_SPEED` 2.0 m/s (feet measured within ~5% of the
+  ground at 2.75 m/s). No footsteps while crouched. Name label 0.5 m lower.
+- Upright upper body (`straightenSpine`): the crouch clips lean the spine
+  18-44 degrees forward and 9-41 to the side (with the pistol's standing
+  aim over the rifle-turned crouch hips too). After the clips, the chest
+  (Torso to Neck) gets its direction in the gun set's standing idle
+  (`gripRest.chest`) plus `CROUCH_CHEST_LEAN` (6 degrees) forward: ~21
+  degrees for the rifle. Below it, the spine bends evenly from the pelvis's
+  up (where the crouch tilts it: back ~20 degrees kneeling, forward ~15
+  crouch-walking; `gripRest.pelvisUp`) to the chest: a third of the turn at
+  each of Hips, Abdomen, Torso, bottom up, shortest turns (no twist). The
+  back curves smoothly and rounds outward.
+  - The models skin the buttocks partly to Abdomen and Hips (bones above
+    and in front of them): the more the spine turns back from the clip,
+    the more the buttocks swing in and the shirt's hem hangs over them
+    (they looked flat). The 6 degrees of extra lean keep them round.
+  - Tried and dropped: turning only the abdomen and chest to the standing
+    waist-to-neck line (all the bend at one joint: arched back, flattened
+    belly); each segment to its standing direction (the standing lower
+    back leans back: a sharp bend at the pelvis, arched in); moving the
+    hip vertices' spine weights onto the pelvis (the shorts' waistband
+    then parted from the shirt's hem); tilting the pelvis back about the
+    hip joints with the thighs turned back (dragged the hem further down).
+- Feet on the shins (all movement, not just crouching): the rig's feet
+  hang off the root bone (its IK setup), each clip placing them at its own
+  shins' ends. Blending two clips (changing direction, starting, stopping)
+  mixes the feet's positions and the legs' turns separately, so they
+  parted for a moment: up to 23 cm (forward to strafe), the ankles
+  stretching. After the mixer, each foot is put at its shin's end
+  (`LowerLegL_end`); its turn stays as blended. Measured in the preview:
+  0 gap through every transition; a foot may dip up to ~3 cm below the
+  ground for a moment in crouched transitions.
+- Gameplay (`shared.js`): `CROUCH_SPEED` 0.5 (2.75 m/s), `CROUCH_SPREAD`
+  0.5 (on the ground), eyes `CROUCH_EYE` 1.25 m (head: 1.2 kneeling, 1.4 walking) (eased over `CROUCH_TIME`
+  0.15 s; `eyeHeight(crouch)`), capsule `CROUCH_HEIGHT` 1.25 m.
+  `World.stepPlayer` takes `input.crouch`; `player.crouched` stays true
+  after release until `canStand` (nothing in the standing capsule above
+  the crouched one).
+- Network: `state` carries `c` (crouched); the host keeps `player.crouch`,
+  sends it in snapshots (`c`) and history; `seenBy` interpolates it, so
+  lag-compensated shots use the crouched hitboxes. Shot-origin fallback and
+  bots' eyes use `eyeHeight`.
+- Hitboxes: `headCenter` blends a crouched version of the head model
+  (`CROUCH_HEAD`, `CROUCH_STYLE`: pivot, arm, tilt and per-direction leans
+  fitted to the straightened crouch in the preview, within 1.5 cm over
+  pitch ±0.8 and every direction). Crouched, the legs box tops out at 0.5 m and the
+  chest box goes up to the head. Checked in a second tab: the drawn head of
+  a crouched player was 2 cm from the hitbox centre.
+- Preview page: a Crouch button.
+- Fix found on the way (`flatEdges`, section 52): an edge counted as flat
+  (ignored by collision) when its first two triangles were coplanar, even
+  if a third met it at an angle. At wall corners whose end face continues
+  the plane of the next wall (e.g. (12, 24)), the corner was ignored and
+  players cut ~0.17 m into it (they couldn't stand up from a crouch
+  there). Now flat means all exposed faces on the edge are coplanar
+  (back-to-back hidden faces, where wall boxes meet end to end, are
+  skipped). 1,500 seeded 2 s walks vs the old rule: 96% identical, none
+  higher or lower, a few steered round corners they used to cut; kerb
+  step-up unchanged (same 24 spots at 0/30/60°, identical results).
+
+## 56. Gun holding regression; pistol firing on the move (2026-10-31)
+
+- Regression from section 55 (not committed): `gripRest[set].chest` (the
+  chest bone's position, `holdGun`'s pivot) was overwritten by the crouch
+  straightening's chest direction. Every gun was placed about the wrong
+  point: long guns at the left shoulder, the pistol's left arm strained.
+  The direction is now `chestDir`. Checked against the last commit with
+  identical inputs (every gun, 5 directions, pitch -0.6/0/0.6, idle and
+  firing, standing): muzzle, both hands and the left elbow 0 mm apart.
+- Pistol and revolver firing on the move (an older problem): the firing
+  overlay (the pistol idle's upper body over the run) included the spine,
+  turning the chest away from the run's; the gun follows the chest
+  (`holdGun`), so it jumped 13-19 cm sideways in view (toward the middle)
+  whenever you fired while moving. The overlay is now the arms only
+  (`ARMS`; the crouch's straightening handles the spine). Grip relative to
+  the head, firing vs not, same frames: under 1 cm on average (2.3 cm at
+  most), crouched or standing; left elbow frame-to-frame movement as
+  before (no snapping).
+- Why the crouched back looked arched in again after the fix: the spine
+  hadn't changed (same segment angles), but with the bug the arms held the
+  gun ~35 cm too high, which hunched the shoulders and rounded the upper
+  back. With the arms right, the shoulders were square. Now the chest
+  alone turns a further `CROUCH_HUNCH` (10 degrees) forward after the
+  straightening (shoulders rounded over the gun). The gun is held from the
+  chest bone, which the hunch doesn't move, but the head comes forward ~8
+  cm; `holdGun` adds that shift (`hunchShift`), so the gun keeps its place
+  relative to the eyes (within ~1 cm of before the hunch). Crouched head
+  hitboxes refitted per holding style (`CROUCH_STYLE` now carries arm,
+  tilt and follow; within 0.9 cm); `CROUCH_EYE` 1.2 m.
+- Long guns crouched leaned too far forward (~30 degrees at the chest vs
+  ~18 with the pistol): the straightening used each gun set's standing
+  chest, and the long guns' standing chest leans ~13 degrees into the gun.
+  Now every gun takes the pistol's forward lean; the sideways lean stays
+  the gun set's own (long guns: ~11 degrees right, the head over the
+  stock). Spine segments now the same for every gun; the long guns' gun
+  relative to the head within ~1-3 cm sideways and ~5 cm of standing.
+  Long-gun crouched head hitboxes refitted (within 0.8 cm).
+
+## 57. Korean translation (2026-10-31)
+
+- Every piece of interface text is in `src/i18n.js` (`STRINGS.en`,
+  `STRINGS.ko`); `t(key, params)` fills `{name}` placeholders, falling back
+  to English, then the key. Weapon, hack and team names come from there too
+  (`weaponName`, `hackName`, `hackShort` for the scoreboard, `hackDesc`,
+  `teamName`); `shared.js` keeps the English names (README, preview, kit).
+- Language: an English / 한국어 switch on the main menu (`#langSwitch`),
+  saved as `hackfps.lang`; without one, Korean (the default). Fixed page text is marked `data-i18n` / `data-i18n-placeholder`
+  (`applyPageText`); the rest is written from code each time it's shown.
+  The menu's status line is kept as a key (and error), so it re-translates
+  when the language is switched.
+- The host's feed messages are sent as `{ t: 'feed', key, ...values }`
+  (joined, left, kill, victory, noBots) and put into words by each client
+  (`feedText`), so every player reads them in their own language. net.js
+  errors carry an `i18n` key (`gameError`).
+- Checked in Chrome: the menu, buy menu (weapons, hacks with descriptions,
+  limits, total, Start countdown), HUD (room line, team scores, weapon,
+  spawn protection, click to play), scoreboard, a bot's join message, the
+  status line and a "room not found" error in both languages; switching
+  language re-translates the menu and its status line; the choice survives
+  a reload.

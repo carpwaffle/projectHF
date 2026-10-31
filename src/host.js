@@ -4,7 +4,7 @@
 // are delivered by direct function call instead of over WebRTC.
 
 import {
-  SNAPSHOT_RATE, MAX_HP, RESPAWN_TIME, EYE_HEIGHT, MAX_RANGE, TEAMS,
+  SNAPSHOT_RATE, MAX_HP, RESPAWN_TIME, eyeHeight, MAX_RANGE,
   WEAPONS, DEFAULT_WEAPON, SWITCH_TIME, SPAWN_PROTECTION, shotDamage, ADMIN_NAME, ADMIN_MONEY,
   PICKUP_RADIUS, PICKUP_RESPAWN, randomPickupWeapon, HEAL_RESPAWN, ALL_SPOTS, MONEY_AMOUNT, MONEY_RESPAWN,
   SURVIVAL_RATE, KILL_REWARD, PLAYER_TIMEOUT, ALL_HACKS, HACK_LIMIT, hasHack, withinHackLimit, hacksPrice, HACK_HP, HEAL_AMOUNT, VICTORY_SCREEN, fireCooldown,
@@ -89,6 +89,7 @@ export class HostServer {
       pos: spawn.pos,
       yaw: spawn.yaw ?? 0,
       pitch: 0,
+      crouch: 0, // 1 while crouched (reported by the client)
       hp: MAX_HP,
       score: 0,
       money: 0, // (set below)
@@ -114,7 +115,7 @@ export class HostServer {
     this.players.set(id, player);
     this.sendTo(id, { t: 'welcome', id, pos: player.pos, yaw: spawn.yaw, team, hackLimit: this.hackLimit });
     this.sendTo(id, { t: 'buy', money: player.money, wait: 0 });
-    this.broadcast({ t: 'feed', text: `${player.name} joined ${TEAMS[team].name}` });
+    this.broadcast({ t: 'feed', key: 'joined', name: player.name, team });
   }
 
   // Everyone starts a round with $0; Admin with ADMIN_MONEY (for testing).
@@ -162,7 +163,7 @@ export class HostServer {
     entry?.state?.close();
     if (!player) return;
     this.broadcast({ t: 'leave', id });
-    this.broadcast({ t: 'feed', text: `${player.name} left` });
+    this.broadcast({ t: 'feed', key: 'left', name: player.name });
   }
 
   // ---- messages ----------------------------------------------------------
@@ -195,6 +196,7 @@ export class HostServer {
     player.pos = [x * k, Math.max(-2, Math.min(40, y)), z * k];
     player.yaw = msg.yaw;
     player.pitch = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, msg.pitch));
+    player.crouch = msg.c ? 1 : 0;
   }
 
   onShoot(shooter, msg) {
@@ -212,7 +214,7 @@ export class HostServer {
     // Fired from the shooter's eye as they saw it (o): our copy of their
     // position is one 'state' message behind, which while running puts the
     // shot ~0.3 m off. Only trusted near where we have them (bots send none).
-    const eye = [shooter.pos[0], shooter.pos[1] + EYE_HEIGHT, shooter.pos[2]];
+    const eye = [shooter.pos[0], shooter.pos[1] + eyeHeight(shooter.crouch), shooter.pos[2]];
     const o = Array.isArray(msg.o) && msg.o.length === 3 && msg.o.every(Number.isFinite) ? msg.o : null;
     const origin = o && Math.hypot(...o.map((x, i) => x - eye[i])) < MAX_SHOT_ORIGIN_OFFSET ? o : eye;
     // The shot's direction(s), spread included (applied by the shooter so their
@@ -261,8 +263,8 @@ export class HostServer {
   // Lag compensation. Clients draw the other players between two snapshots,
   // INTERP_DELAY behind (plus the trip from the host), and say which with
   // each shot: v = [snapshot n before, snapshot n after, fraction between].
-  // Returns p => the pose a player had there (position, aim, weapon, and
-  // velocity for the head's lean; skin: body size), as the shooter saw it. Without v (bots),
+  // Returns p => the pose a player had there (position, aim, weapon, crouch,
+  // and velocity for the head's lean; skin: body size), as the shooter saw it. Without v (bots),
   // or once those snapshots are older than HISTORY: where they are now.
   seenBy(v) {
     const find = (n) => this.history.find((h) => h.n === n);
@@ -279,7 +281,7 @@ export class HostServer {
         const prev = this.history.at(-2)?.players.get(p.id);
         const last = latest?.players.get(p.id);
         const vel = prev && last ? last.pos.map((x, i) => (x - prev.pos[i]) * SNAPSHOT_RATE) : undefined;
-        return { pos: p.pos, yaw: p.yaw, pitch: p.pitch, weapon: p.weapon, vel, skin: p.skin };
+        return { pos: p.pos, yaw: p.yaw, pitch: p.pitch, weapon: p.weapon, vel, skin: p.skin, crouch: p.crouch };
       }
       if (Math.hypot(pb.pos[0] - pa.pos[0], pb.pos[2] - pa.pos[2]) > 3) pa = pb; // respawned (as the client draws it)
       const steps = Math.max(1, b.n - a.n);
@@ -288,6 +290,7 @@ export class HostServer {
         yaw: pa.yaw + Math.atan2(Math.sin(pb.yaw - pa.yaw), Math.cos(pb.yaw - pa.yaw)) * k,
         pitch: pa.pitch + (pb.pitch - pa.pitch) * k,
         weapon: pb.weapon,
+        crouch: pa.crouch + (pb.crouch - pa.crouch) * k, // (eased in between, like the drawn character)
         vel: pb.pos.map((x, i) => ((x - pa.pos[i]) * SNAPSHOT_RATE) / steps),
         skin: p.skin,
       };
@@ -317,7 +320,7 @@ export class HostServer {
       shooter.money += KILL_REWARD;
       this.sendTo(victim.id, { t: 'buy', money: victim.money, wait: RESPAWN_TIME, earned, alive: Math.round(alive) });
       this.sendTo(shooter.id, { t: 'earn', amount: KILL_REWARD, money: shooter.money });
-      this.broadcast({ t: 'feed', text: `${shooter.name} ➜ ${victim.name}${headshot ? ' (headshot)' : ''}` });
+      this.broadcast({ t: 'feed', key: 'kill', killer: shooter.name, victim: victim.name, hs: headshot ? 1 : 0 });
     }
   }
 
@@ -440,6 +443,7 @@ export class HostServer {
         p.reloadEnd = 0;
         p.switchEnd = 0;
         p.protectedUntil = now + SPAWN_PROTECTION;
+        p.crouch = 0;
         this.sendTo(p.id, { t: 'respawn', pos: p.pos, yaw: spawn.yaw, w: p.weapon, h: p.hack, hp: p.hp, money: p.money });
       }
     }
@@ -449,7 +453,7 @@ export class HostServer {
     this.lastSnapshot = now;
     const all = [...this.players.values()];
     const n = ++this.snapSeq;
-    this.history.push({ n, players: new Map(all.map((p) => [p.id, { pos: [...p.pos], yaw: p.yaw, pitch: p.pitch, weapon: p.weapon }])) });
+    this.history.push({ n, players: new Map(all.map((p) => [p.id, { pos: [...p.pos], yaw: p.yaw, pitch: p.pitch, weapon: p.weapon, crouch: p.crouch }])) });
     if (this.history.length > HISTORY) this.history.shift();
     const players = all.map((p) => ({
       id: p.id,
@@ -464,6 +468,7 @@ export class HostServer {
       dead: p.dead,
       w: p.weapon,
       rl: p.reloadEnd ? 1 : 0, // reloading (for the animation)
+      c: p.crouch, // crouched
       sp: now < p.protectedUntil ? 1 : 0, // spawn-protected
       m: p.money,
       gone: p.dead && (p.joining || now >= p.respawnAt) ? 1 : 0, // in the buy menu: not drawn
@@ -491,7 +496,7 @@ export class HostServer {
       p.hack = 0;
     }
     this.broadcast({ t: 'victory', team: player.team, by: player.name, time: VICTORY_SCREEN });
-    this.broadcast({ t: 'feed', text: `${player.name} hacked the game: ${TEAMS[player.team].name} wins!` });
+    this.broadcast({ t: 'feed', key: 'victory', name: player.name, team: player.team });
   }
 
   newRound() {

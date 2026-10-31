@@ -7,6 +7,9 @@
 //     the body's frame, and used to blend the idle / run forward / run
 //     backward / strafe clips. The run clips share one phase so the feet
 //     stay in step while blending between directions.
+//   - Crouching (state.crouch): the crouch idle / walk clips (one set for
+//     every gun; the pistol's two-handed aim goes on the upper body),
+//     cross-faded with the standing ones.
 //   - Airborne: jump loop clip.  Death: death clip, played once.
 //   - Aim: the spine bends with the player's pitch, so the rifle and head
 //     follow where they're looking.
@@ -35,22 +38,31 @@ import { SKINS, assets } from './assets.js';
 import { makeMuzzleFlash } from './effects.js';
 
 const LOCOMOTION = ['run_forward', 'run_backward', 'strafe_left', 'strafe_right'];
+const CROUCH_LOCO = ['crouch_forward', 'crouch_backward', 'crouch_left', 'crouch_right']; // (in LOCOMOTION's order)
 const RUN_ANIM_SPEED = 5; // m/s at which the run clips play at normal speed
+const CROUCH_ANIM_SPEED = 2.0; // ... and the crouch walk clips
+const CROUCH_LABEL_DROP = 0.5; // m the name label comes down while crouched
+const SPINE = [['hips', 'abdomen'], ['abdomen', 'torso'], ['torso', 'neck']]; // the spine's segments, bottom up
+const CROUCH_CHEST_LEAN = THREE.MathUtils.degToRad(6); // straightening the crouch: the chest leans this much further forward than standing
+const CROUCH_HUNCH = THREE.MathUtils.degToRad(10); // ... and the chest alone turns this much more (shoulders rounded over the gun)
 const SPEED_FALL = 25; // m/s per second: how fast the animation speed may drop (see speedHold)
 const AIR_DELAY = 0.1; // seconds above the ground before the jump clip starts
 
 // Upper-body bones (three.js strips the dots: "UpperArm.L" -> "UpperArmL").
 const UPPER_BODY = /^(Abdomen|Torso|Neck|Head|Shoulder|UpperArm|LowerArm|Palm|Fingers|Thumb)/;
+const ARMS = /^(Shoulder|UpperArm|LowerArm|Palm|Fingers|Thumb)/;
 // The mixer averages actions by weight, so to make the reload win on the
 // upper body (over the full-body locomotion clips) it gets a heavy weight.
 const RELOAD_WEIGHT = 12;
 const upperBodyClips = {}; // gender/clip -> clip with only the upper-body tracks
 
-function upperBodyClip(gender, clip) {
-  upperBodyClips[`${gender}/${clip.name}`] ??= new THREE.AnimationClip(
-    `${clip.name}_upper`, clip.duration, clip.tracks.filter((t) => UPPER_BODY.test(t.name)),
+// bones: which tracks to keep (UPPER_BODY, or ARMS only).
+function upperBodyClip(gender, clip, bones = UPPER_BODY) {
+  const key = `${gender}/${clip.name}/${bones.source}`;
+  upperBodyClips[key] ??= new THREE.AnimationClip(
+    `${clip.name}_${bones === ARMS ? 'arms' : 'upper'}`, clip.duration, clip.tracks.filter((t) => bones.test(t.name)),
   );
-  return upperBodyClips[`${gender}/${clip.name}`];
+  return upperBodyClips[key];
 }
 
 // Gun-local points (metres; every gun's origin is its trigger, muzzle at -Z),
@@ -182,10 +194,13 @@ const SETS = {
   rifle: { idle: 'idle', loco: LOCOMOTION, jump: 'jump_loop' },
   pistol: { idle: 'pistol_idle', loco: LOCOMOTION.map((n) => `pistol_${n}`), jump: 'pistol_jump_loop' },
 };
-// Pistol-style firing (run-firing): while shooting, the pistol idle's upright
-// two-handed aim on the upper body, over whatever the legs are doing. (Not the
-// Mixamo Firing clip: it bends the torso over, drops the hands and pulls them
-// back in a big recoil. The kick is procedural, like the long guns'.)
+// Pistol-style firing (run-firing): while shooting, the pistol idle's
+// two-handed aim on the arms, over whatever the body is doing. Arms only:
+// with the idle's spine too, the chest turned away from the run's, and the
+// gun (which follows the chest, see holdGun) jumped ~20 cm sideways in view
+// whenever you fired on the move. (Not the Mixamo Firing clip: it bends the
+// torso over, drops the hands and pulls them back in a big recoil. The kick
+// is procedural, like the long guns'.)
 const FIRE_WEIGHT = 12;
 const FIRE_HOLD = 0.5; // seconds the aim is held after a shot
 
@@ -318,6 +333,11 @@ export class Character {
 
     const bone = (n) => this.model.getObjectByName(n);
     this.bones = {
+      body: bone('Body'), // the pelvis
+      // Feet hang off the root (the rig's IK setup), not the shins: placed at
+      // the shins' ends every frame (see update).
+      feet: [[bone('FootL'), bone('LowerLegL_end')], [bone('FootR'), bone('LowerLegR_end')]],
+      hips: bone('Hips'), // (the lowest spine bone)
       abdomen: bone('Abdomen'),
       torso: bone('Torso'),
       neck: bone('Neck'),
@@ -335,7 +355,7 @@ export class Character {
     const clips = assets.clips[this.gender];
     this.actions = {};
     const setClips = Object.values(SETS).flatMap((set) => [set.idle, ...set.loco, set.jump]);
-    for (const name of [...setClips, 'death']) {
+    for (const name of [...setClips, 'crouch_idle', ...CROUCH_LOCO, 'death']) {
       const action = this.mixer.clipAction(clips[name]);
       action.setEffectiveWeight(0).play();
       this.actions[name] = action;
@@ -343,6 +363,9 @@ export class Character {
     for (const set of Object.values(SETS)) {
       for (const name of set.loco) this.actions[name].timeScale = 0; // driven by this.phase
     }
+    for (const name of CROUCH_LOCO) this.actions[name].timeScale = 0;
+    this.crouch = 0; // 0 = standing .. 1 = crouched (eased)
+    this.hunchShift = new THREE.Vector3(); // how far the crouch's hunch moved the head (character space; see straightenSpine)
     this.actions.death.setLoop(THREE.LoopOnce, 1);
     this.actions.death.clampWhenFinished = true;
     const reload = this.mixer.clipAction(upperBodyClip(this.gender, clips.reload));
@@ -351,7 +374,7 @@ export class Character {
     reload.timeScale = reload.getClip().duration / WEAPONS.find((w) => w.id === 'rifle').reloadTime;
     reload.setEffectiveWeight(0).play();
     this.actions.reload = reload;
-    const fire = this.mixer.clipAction(upperBodyClip(this.gender, clips.pistol_idle));
+    const fire = this.mixer.clipAction(upperBodyClip(this.gender, clips.pistol_idle, ARMS));
     fire.setEffectiveWeight(0).play();
     this.actions.pistol_fire = fire;
     this.pistolBlend = 0; // 0 = rifle set, 1 = pistol set (cross-faded on switching)
@@ -467,6 +490,11 @@ export class Character {
       shoulder: this.object.worldToLocal(this.bones.rightUpper.getWorldPosition(new THREE.Vector3())),
       chest: this.object.worldToLocal(this.bones.torso.getWorldPosition(new THREE.Vector3())),
       chestYaw: this.chestYaw(),
+      // For straightening the crouch: the chest's direction (Torso to Neck),
+      // and the pelvis's up (in the pelvis bone's space: up while standing).
+      chestDir: this.object.worldToLocal(this.bones.neck.getWorldPosition(new THREE.Vector3()))
+        .sub(this.object.worldToLocal(this.bones.torso.getWorldPosition(new THREE.Vector3()))).normalize(),
+      pelvisUp: new THREE.Vector3(0, 1, 0).applyQuaternion(this.bones.body.getWorldQuaternion(new THREE.Quaternion()).invert()),
       forearmR: forearm(this.bones.rightLower, this.bones.rightHand),
       forearmL: forearm(this.bones.leftLower, this.bones.leftHand),
       leftInGun: this.bones.leftHand.getWorldQuaternion(new THREE.Quaternion()),
@@ -634,32 +662,34 @@ export class Character {
       this.fallSpeed = 0;
     }
     this.air = damp(this.air, this.airborne && alive ? 1 : 0, 10, dt);
+    this.crouch = damp(this.crouch, state.crouch && !this.dead ? 1 : 0, 14, dt);
+    this.label.position.y = PLAYER_HEIGHT + 0.35 - CROUCH_LABEL_DROP * this.crouch;
     this.recoil = damp(this.recoil, 0, 16, dt);
     this.gun.userData.flash.userData.update(dt);
 
     // ---- clip weights ------------------------------------------------------
     const living = 1 - this.deathBlend;
-    const ground = (1 - this.air) * living;
-    const loco = this.move * ground;
+    const crouch = this.crouch * (1 - this.air);
+    const ground = (1 - this.air) * living * (1 - crouch);
+    const low = (1 - this.air) * living * crouch;
     const f = this.dirF;
     const s = this.dirS;
     const total = Math.abs(f) + Math.abs(s) || 1;
-    const base = {
-      idle: (1 - this.move) * ground,
-      run_forward: loco * Math.max(0, f) / total,
-      run_backward: loco * Math.max(0, -f) / total,
-      strafe_left: loco * Math.max(0, -s) / total,
-      strafe_right: loco * Math.max(0, s) / total,
-      jump: this.air * living,
-    };
+    // Share of each direction (forward, backward, left, right: LOCOMOTION's order).
+    const dirs = [Math.max(0, f) / total, Math.max(0, -f) / total, Math.max(0, -s) / total, Math.max(0, s) / total];
+    const base = { idle: (1 - this.move) * ground, jump: this.air * living };
+    LOCOMOTION.forEach((name, i) => { base[name] = this.move * ground * dirs[i]; });
     // The holding style's set, cross-faded when switching between styles.
     this.pistolBlend = damp(this.pistolBlend, GUNS[this.weaponId].set === 'pistol' ? 1 : 0, 12, dt);
     const firing = clamp(1 - ((now - this.fireAt) / 1000 - FIRE_HOLD) / 0.25, 0, 1); // held, then fades
     const w = {
       death: this.deathBlend,
       reload: this.weaponId === 'rifle' ? RELOAD_WEIGHT * this.reloadBlend * living : 0,
-      pistol_fire: FIRE_WEIGHT * firing * this.pistolBlend * living,
+      // (crouched: the pistol's aim over the crouch clips, which hold a rifle)
+      pistol_fire: FIRE_WEIGHT * Math.max(firing, crouch) * this.pistolBlend * living,
+      crouch_idle: (1 - this.move) * low,
     };
+    CROUCH_LOCO.forEach((name, i) => { w[name] = this.move * low * dirs[i]; });
     for (const [setName, set] of Object.entries(SETS)) {
       const k = setName === 'pistol' ? this.pistolBlend : 1 - this.pistolBlend;
       w[set.idle] = base.idle * k;
@@ -670,7 +700,7 @@ export class Character {
 
     // Shared run phase: one cycle per weighted-average clip length, sped up
     // or slowed down to match the actual movement speed.
-    const allLoco = Object.values(SETS).flatMap((set) => set.loco);
+    const allLoco = [...Object.values(SETS).flatMap((set) => set.loco), ...CROUCH_LOCO];
     let cycle = 0;
     let weightSum = 0;
     for (const name of allLoco) {
@@ -680,13 +710,14 @@ export class Character {
     const lastPhase = this.phase;
     if (weightSum > 0.001) {
       cycle /= weightSum;
-      this.phase = (this.phase + (dt / cycle) * clamp(speed / RUN_ANIM_SPEED, 0.6, 1.6)) % 1;
+      const animSpeed = RUN_ANIM_SPEED + (CROUCH_ANIM_SPEED - RUN_ANIM_SPEED) * crouch;
+      this.phase = (this.phase + (dt / cycle) * clamp(speed / animSpeed, 0.6, 1.6)) % 1;
     }
 
     // ---- sounds: footsteps (landings: see airborne above) --------------------
-    // A foot lands twice per run cycle (phase 0 and 0.5).
+    // A foot lands twice per run cycle (phase 0 and 0.5). Crouching is silent.
     const stepped = this.phase < lastPhase || (lastPhase < 0.5 && this.phase >= 0.5);
-    if (stepped && !this.airborne && !this.dead && this.move > 0.3 && weightSum > 0.001) {
+    if (stepped && !this.airborne && !this.dead && this.crouch < 0.5 && this.move > 0.3 && weightSum > 0.001) {
       this.onSound?.('step', clamp(speed / MOVE_SPEED, 0.4, 1));
     }
     for (const name of allLoco) {
@@ -695,6 +726,15 @@ export class Character {
 
     this.mixer.update(dt);
     this.object.updateMatrixWorld(true);
+    // Each clip puts the feet at its own shins' ends, but blending two clips
+    // (changing direction, starting, stopping) mixes the feet's positions and
+    // the legs' turns separately, and they part: up to ~20 cm, the ankles
+    // stretching for a moment. Put the feet back on the blended shins.
+    for (const [foot, shinEnd] of this.bones.feet) {
+      foot.parent.worldToLocal(shinEnd.getWorldPosition(foot.position));
+      foot.updateMatrixWorld(true);
+    }
+    this.straightenSpine(crouch * living);
     // Where the clips put the chest (before aiming bends the spine): the gun follows it.
     this.object.worldToLocal(this.bones.torso.getWorldPosition(this.chestPos));
     const chestYaw = this.chestYaw();
@@ -773,6 +813,51 @@ export class Character {
     this.shadow.visible = this.deathBlend < 0.5 && fade > 0;
   }
 
+  // The crouch clips bend the upper body well forward (30-45 degrees) and
+  // to the side (20-40; the pistol's aim, made for standing hips, too).
+  // The chest ends up as in the gun set's standing idle, CROUCH_CHEST_LEAN
+  // further forward; below it, the spine bends evenly from where the crouch
+  // puts the pelvis (tilted back kneeling, forward crouch-walking) to the
+  // chest: a third of the turn at each joint, bottom up, so the back curves
+  // smoothly (rounded outward, not arched in, with no sharp bend at the
+  // pelvis). The shortest turn each time, so no twist is added.
+  // (The models skin the buttocks partly to the spine, below its joints:
+  // the more the spine turns back from the clip, the more they swing in and
+  // the shirt's hem hangs over them, flat. Fully upright looked flat;
+  // tilting the pelvis back instead was worse, dragging the hem down.)
+  // weight: 0..1.
+  straightenSpine(weight) {
+    this.hunchShift.set(0, 0, 0);
+    if (weight < 0.001) return;
+    const rest = gripRest[this.gender];
+    _pelvis.copy(rest.rifle.pelvisUp).applyQuaternion(this.bones.body.getWorldQuaternion(_hq));
+    // (Leaning forward only as much as the pistol's chest, for every gun:
+    // the long guns' standing chest leans ~13 degrees into the gun, which
+    // with the lean and hunch below was ~30 degrees crouched: too far. The
+    // sideways lean is the gun's own: the long guns' head over the stock.)
+    const side = rest.rifle.chestDir.x + (rest.pistol.chestDir.x - rest.rifle.chestDir.x) * this.pistolBlend;
+    const forward = rest.pistol.chestDir.z;
+    _chest.set(side, Math.sqrt(Math.max(0, 1 - side * side - forward * forward)), forward)
+      .transformDirection(this.object.matrixWorld)
+      .applyAxisAngle(_axis.set(1, 0, 0).transformDirection(this.object.matrixWorld), -CROUCH_CHEST_LEAN);
+    _bend.setFromUnitVectors(_pelvis, _chest);
+    SPINE.forEach(([from, to], i) => {
+      _target.copy(_pelvis).applyQuaternion(_q2.identity().slerp(_bend, (i + 1) / SPINE.length));
+      const bone = this.bones[from];
+      _v.subVectors(this.bones[to].getWorldPosition(_hp), bone.getWorldPosition(_w)).normalize();
+      rotateBoneByWorldQuat(bone, _q2.setFromUnitVectors(_v, _target).slerp(_identity, 1 - weight));
+    });
+    // Shoulders rounded forward over the gun (an outward-rounded upper back):
+    // the chest turns forward about its own joint. The gun is held from the
+    // chest bone, which this doesn't move, but the head comes forward; the
+    // gun follows the head (hunchShift, see holdGun), so it stays where it
+    // was in view.
+    const head = this.bones.head;
+    this.object.worldToLocal(head.getWorldPosition(this.hunchShift)).negate();
+    rotateBoneWorld(this.bones.torso, _axis.set(1, 0, 0).transformDirection(this.object.matrixWorld), -CROUCH_HUNCH * weight);
+    this.hunchShift.add(this.object.worldToLocal(head.getWorldPosition(_w)));
+  }
+
   // Which way the chest faces in character space (radians about up).
   chestYaw() {
     _v.set(0, 0, 1).applyQuaternion(this.bones.torso.getWorldQuaternion(_hq))
@@ -801,7 +886,7 @@ export class Character {
     _pivot.lerpVectors(rest.rifle.chest, rest.pistol.chest, k);
     const restYaw = rest.rifle.chestYaw + (rest.pistol.chestYaw - rest.rifle.chestYaw) * k;
     const twist = Math.atan2(Math.sin(chestYaw - restYaw), Math.cos(chestYaw - restYaw)) * CHEST_TWIST_FOLLOW;
-    _target.sub(_pivot).applyAxisAngle(_yAxis, twist).add(this.chestPos);
+    _target.sub(_pivot).applyAxisAngle(_yAxis, twist).add(this.chestPos).add(this.hunchShift);
     this.object.localToWorld(_target);
     const { rightUpper: upper, rightLower: lower, rightHand: hand } = this.bones;
     _upperQ.copy(upper.quaternion);
@@ -1020,6 +1105,11 @@ export class Character {
 
 const _pq = new THREE.Quaternion();
 const _q = new THREE.Quaternion();
+const _q2 = new THREE.Quaternion();
+const _bend = new THREE.Quaternion();
+const _pelvis = new THREE.Vector3();
+const _chest = new THREE.Vector3();
+const _identity = new THREE.Quaternion();
 const _a = new THREE.Vector3();
 const _b = new THREE.Vector3();
 const _c = new THREE.Vector3();

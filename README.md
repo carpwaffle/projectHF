@@ -18,11 +18,14 @@ that link gets the code filled in and just enters a name and clicks **Join**.
 Players who close their tab (or crash, or lose their connection) are removed
 within a few seconds.
 
+The game is in English and Korean (한국어): switch on the main menu. The
+choice is remembered in the browser; Korean is the default. Each player sees the game in their own language.
+
 ES modules don't load from `file://`, so you need a local server. To play
 with friends over the internet, put these static files on any host, such as
 GitHub Pages, Netlify or itch.io.
 
-Controls: WASD move · Space jump · Mouse aim · Click shoot · R reload · Q / E fly up / down (fly hack) · Shift aim lock (aim hack) · 1-6 / wheel switch weapon (only for the player named "Admin") · Right mouse scope (sniper) · M mute · Tab scoreboard · Esc release mouse.
+Controls: WASD move · Space jump · Ctrl (hold) crouch · Mouse aim · Click shoot · R reload · Q / E fly up / down (fly hack) · Shift aim lock (aim hack) · 1-6 / wheel switch weapon (only for the player named "Admin") · Right mouse scope (sniper) · M mute · Tab scoreboard · Esc release mouse.
 
 **Hacks.** The core of the game: in the same menu you also buy hacks
 (you pay for the weapon and each hack), active until your next death. How
@@ -88,7 +91,10 @@ when the magazine runs dry. Spare magazines are unlimited. Weapon stats live in
 
 Players have 200 HP. Headshots do extra damage (see the table: e.g. the rifle
 kills with 4 headshots or 8 body shots). Shots spread more
-while moving and most in the air; the crosshair ticks show how much. Most
+while moving and most in the air, and half as much crouched; the crosshair
+ticks show how much. Crouching (hold Ctrl) also halves your speed and
+lowers you (eyes, hitboxes; you fit under 1.25 m, and stand up again once
+there's room). Most
 to least accurate: sniper (a little more so scoped), revolver, pistol and
 rifle, P90, shotgun. After
 spawning you're protected for 3 s (a faint shield), until you fire. A red arc
@@ -193,6 +199,7 @@ A ring of facades closes the arena; the game also keeps players inside the
 | `src/bots.js` | AI players (bots), run by the host |
 | `src/nav.js`, `src/nav-worker.js` | The bots' navigation graph (built from the map's collision in a worker) and A* paths |
 | `src/main.js` | Menu, input, local movement, interpolation, HUD |
+| `src/i18n.js` | Interface text in English and Korean, the language switch |
 | `src/render.js` | three.js scene, first-person rifle, tracers |
 | `src/character.js` | Animated player character: clip blending, aim, rifle in hand, left-hand IK |
 | `src/assets.js` | Loads the GLB models; list of character skins |
