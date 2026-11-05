@@ -55,7 +55,7 @@ export class World {
 
   // player: { pos:[x,y,z], vel:[x,y,z], onGround, crouched }
   // input:  { forward:-1..1, right:-1..1, jump:bool, yaw,
-  //           speed (multiplier, default 1), fly (-1..1: fly hack up / down; undefined: no fly),
+  //           speed (multiplier, default 1), jumpHeight (multiplier, default 1), fly (-1..1: fly hack up / down; undefined: no fly),
   //           noclip (bool: through walls and ceilings, still standing on floors),
   //           crouch (bool: held; standing up again waits for headroom) }
   stepPlayer(player, input, dt) {
@@ -76,7 +76,7 @@ export class World {
     if (input.fly !== undefined) {
       player.vel[1] = input.fly * FLY_SPEED; // hovers when neither key is held
     } else if (input.jump && player.onGround) {
-      player.vel[1] = JUMP_SPEED;
+      player.vel[1] = JUMP_SPEED * Math.sqrt(input.jumpHeight ?? 1); // (height grows with speed²)
       player.onGround = false;
     }
     const steps = Math.max(1, Math.ceil(dt / SUBSTEP));

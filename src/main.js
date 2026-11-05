@@ -5,7 +5,7 @@
 import {
   STATE_SEND_RATE, INTERP_DELAY, eyeHeight, CROUCH_TIME, MAX_HP, MOVE_SPEED, HOST_TIMEOUT,
   MAX_RANGE, TEAMS, WEAPONS, DEFAULT_WEAPON, SWITCH_TIME, RESPAWN_TIME, SPAWN_PROTECTION,
-  ADMIN_NAME, PICKUP_SPOTS, HACKS, hasHack, HACK_LIMIT, hackCount, withinHackLimit, hackList, hacksPrice, SPEED_HACK, FLY_HACK_SPEED, RECOIL_HACK, fireCooldown, headAABB, lookDir, rayPlayer, spreadFor, spreadDir,
+  ADMIN_NAME, PICKUP_SPOTS, HACKS, hasHack, HACK_LIMIT, hackCount, withinHackLimit, hackList, hacksPrice, SPEED_HACK, SPEED_HACK_JUMP, FLY_HACK_SPEED, RECOIL_HACK, fireCooldown, headAABB, lookDir, rayPlayer, spreadFor, spreadDir,
 } from './shared.js';
 import { makeRoomCode, openHostPeer, joinRoom } from './net.js';
 import { HostServer, HOST_ID } from './host.js';
@@ -94,7 +94,7 @@ const me = {
   switchEnd: 0, // performance.now() ms when the weapon switch finishes
   scope: 0, // 0 = not scoped .. 1 = fully scoped
   spread: 0, // current shot spread (radians), follows movement
-  crouched: false, // (hold Ctrl; set by World.stepPlayer: stays down until there's room to stand)
+  crouched: false, // (hold Ctrl or Shift; set by World.stepPlayer: stays down until there's room to stand)
   crouch: 0, // 0 = standing .. 1 = crouched, eased over CROUCH_TIME (the eyes)
   protectedUntil: 0, // performance.now() ms; spawn protection (for the HUD; the host enforces it)
 };
@@ -117,9 +117,15 @@ const locked = () => document.pointerLockElement === canvas;
 const weapon = () => WEAPONS[me.weapon];
 const BASE_FOV = renderer.camera.fov;
 
+// Windows Chrome closes the tab on Ctrl+W (crouch + forward) and pages can't
+// block it, so ask before leaving a match. (Shift crouches without the risk.)
+window.addEventListener('beforeunload', (e) => {
+  if (session) e.preventDefault();
+});
+
 window.addEventListener('keydown', (e) => {
   keys.add(e.code);
-  if (e.ctrlKey && locked()) e.preventDefault(); // (Ctrl: crouch; not the browser's Ctrl shortcuts)
+  if ((e.ctrlKey || e.altKey) && locked()) e.preventDefault(); // (Ctrl: crouch, Alt: aim hack; not the browser's shortcuts)
   if (e.code === 'Tab' && session) { e.preventDefault(); $('scoreboard').hidden = false; }
   if (e.code === 'KeyR' && session && locked()) startReload(performance.now());
   if (e.code === 'KeyM' && session) addFeed(t(toggleMute() ? 'feed.soundOff' : 'feed.soundOn'));
@@ -137,6 +143,7 @@ window.addEventListener('wheel', (e) => {
 canvas.addEventListener('contextmenu', (e) => e.preventDefault());
 window.addEventListener('keyup', (e) => {
   keys.delete(e.code);
+  if (e.key === 'Alt' && locked()) e.preventDefault(); // (else Windows focuses the browser menu)
   if (e.code === 'Tab') $('scoreboard').hidden = true;
 });
 window.addEventListener('blur', () => { keys.clear(); mouseDown = false; aimHeld = false; });
@@ -171,9 +178,10 @@ function readMoveInput() {
     jump: !!k('Space'),
     yaw: me.yaw,
     speed: speedHack(),
+    jumpHeight: has('speed') ? SPEED_HACK_JUMP : 1,
     fly: has('fly') ? k('KeyQ') - k('KeyE') : undefined,
     noclip: has('noclip'),
-    crouch: !!(k('ControlLeft') || k('ControlRight')),
+    crouch: !!(k('ControlLeft') || k('ControlRight') || k('ShiftLeft') || k('ShiftRight')),
   };
 }
 
@@ -789,7 +797,7 @@ function updateVictory(now) {
 }
 
 // ---- aim hack ---------------------------------------------------------------
-// While Shift is held: snap the view onto the head of the visible enemy
+// While Alt is held: snap the view onto the head of the visible enemy
 // closest to where we're aiming (in sight and on screen), exactly where it's
 // drawn: with lag compensation the host checks the shot against what we saw
 // (see HostServer.seenBy), so there's nothing to lead.
@@ -835,7 +843,7 @@ function frame(now) {
     me.crouch = me.crouched ? Math.min(1, me.crouch + dt / CROUCH_TIME) : Math.max(0, me.crouch - dt / CROUCH_TIME);
     updateReload(now);
     updateScope(dt, now);
-    if (has('aim') && (keys.has('ShiftLeft') || keys.has('ShiftRight')) && locked() && !me.dead) aimLock();
+    if (has('aim') && (keys.has('AltLeft') || keys.has('AltRight')) && locked() && !me.dead) aimLock();
     tryShoot(now);
 
     if (!me.dead && now - lastStateSent >= 1000 / STATE_SEND_RATE) {

@@ -107,14 +107,14 @@ export const KILL_REWARD = 500;
 // the network; 0 = none. Listed (and shown in the buy menu) by price.
 export const HACKS = [
   { id: 'map', name: 'Map hack', price: 300, desc: 'Minimap: every player and pickup timer' },
-  { id: 'speed', name: 'Speed hack', price: 400, desc: 'Move 3x faster' },
+  { id: 'speed', name: 'Speed hack', price: 400, desc: 'Move 3x faster, jump 2.5x higher' },
   { id: 'recoil', name: 'Recoil hack', price: 500, desc: '85% less spread' },
   { id: 'ammo', name: 'Infinite ammo hack', price: 500, desc: 'No reloads; faster shotgun and sniper' },
   { id: 'noclip', name: 'No-clip hack', price: 600, desc: 'Walk through walls and ceilings' },
   { id: 'fly', name: 'Fly hack', price: 700, desc: 'Q up, E down (up to 25 m); a bit faster' },
   { id: 'wall', name: 'Wall hack', price: 900, desc: 'See players and hitboxes through walls' },
   { id: 'hp', name: 'HP hack', price: 1000, desc: '1500 HP' },
-  { id: 'aim', name: 'Aim hack', price: 2000, desc: 'Hold Shift: lock onto a visible head' },
+  { id: 'aim', name: 'Aim hack', price: 2000, desc: 'Hold Alt: lock onto a visible head' },
   { id: 'victory', name: 'Victory hack', price: 10000, desc: 'Your team wins the round' },
 ];
 export const ALL_HACKS = (1 << HACKS.length) - 1; // (every bit in use)
@@ -127,6 +127,7 @@ export const hasHack = (mask, id) => (mask & hackBit(id)) !== 0;
 export const hackList = (mask) => HACKS.filter((_, i) => mask & (1 << i));
 export const hacksPrice = (mask) => hackList(mask).reduce((sum, h) => sum + h.price, 0);
 export const SPEED_HACK = 3.0; // movement speed multiplier
+export const SPEED_HACK_JUMP = 2.5; // jump height multiplier (1.2 m -> 3.1 m)
 export const FLY_HACK_SPEED = 1.3; // ... while flying with the fly hack (without the speed hack)
 export const RECOIL_HACK = 0.15; // spread multiplier (85% less)
 export const FLY_SPEED = 6; // m/s up / down with the fly hack

@@ -25,7 +25,7 @@ ES modules don't load from `file://`, so you need a local server. To play
 with friends over the internet, put these static files on any host, such as
 GitHub Pages, Netlify or itch.io.
 
-Controls: WASD move · Space jump · Ctrl (hold) crouch · Mouse aim · Click shoot · R reload · Q / E fly up / down (fly hack) · Shift aim lock (aim hack) · 1-6 / wheel switch weapon (only for the player named "Admin") · Right mouse scope (sniper) · M mute · Tab scoreboard · Esc release mouse.
+Controls: WASD move · Space jump · Ctrl or Shift (hold) crouch · Mouse aim · Click shoot · R reload · Q / E fly up / down (fly hack) · Alt aim lock (aim hack) · 1-6 / wheel switch weapon (only for the player named "Admin") · Right mouse scope (sniper) · M mute · Tab scoreboard · Esc release mouse.
 
 **Hacks.** The core of the game: in the same menu you also buy hacks
 (you pay for the weapon and each hack), active until your next death. How
@@ -43,14 +43,14 @@ Teammates can see each other's hacks on the scoreboard; the other team can't.
 | Hack | Price | Effect |
 |---|---|---|
 | Map | $300 | Minimap (lower left): every player with their name, every pickup spot and its countdown |
-| Speed | $400 | Move 3x faster |
+| Speed | $400 | Move 3x faster, jump 2.5x higher |
 | Recoil | $500 | 85% less spread |
 | Infinite ammo | $500 | No reloads; shotgun and sniper fire twice as fast |
 | No-clip | $600 | Walk through walls and ceilings (floors and the boundary still hold) |
 | Fly | $700 | Q up, E down, hover otherwise; up to 25 m, inside the boundary; moves 1.3x faster |
 | Wall | $900 | See every player through walls: silhouette in their team colour plus hitboxes |
 | HP | $1,000 | 1500 HP (heal packs still heal 100) |
-| Aim | $2,000 | Hold Shift: the view locks onto the head of the visible enemy nearest the crosshair |
+| Aim | $2,000 | Hold Alt: the view locks onto the head of the visible enemy nearest the crosshair |
 | Victory | $10,000 | Your team wins the round: 10 s victory screen, then a new round (money, kills and hacks reset) |
 
 **Money.** Everyone starts with $0 (the player named "Admin" with $999,999, for testing) and earns $16 for every second they stay
@@ -92,7 +92,7 @@ when the magazine runs dry. Spare magazines are unlimited. Weapon stats live in
 Players have 200 HP. Headshots do extra damage (see the table: e.g. the rifle
 kills with 4 headshots or 8 body shots). Shots spread more
 while moving and most in the air, and half as much crouched; the crosshair
-ticks show how much. Crouching (hold Ctrl) also halves your speed and
+ticks show how much. Crouching (hold Ctrl or Shift) also halves your speed and
 lowers you (eyes, hitboxes; you fit under 1.25 m, and stand up again once
 there's room). Most
 to least accurate: sniper (a little more so scoped), revolver, pistol and

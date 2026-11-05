@@ -1213,7 +1213,7 @@ fly 700, noclip 800, aim 900, hp 1200, victory 10000.
   and trusted, like before.
 - **Recoil**: spread x `RECOIL_HACK` (0.15); flying counts as on the ground
   for spread; speed hack doesn't add movement spread beyond normal running.
-- **Aim** (main.js `aimLock`, Shift held): nearest enemy head (headAABB
+- **Aim** (main.js `aimLock`, Alt held): nearest enemy head (headAABB
   centre of the drawn avatar) by angle from the view, on screen, with a
   clear line (world raycast); sets yaw / pitch exactly.
 - **Wall** (render.js `renderWallHack`): avatars' skinned meshes on layer
@@ -1244,6 +1244,8 @@ fly 700, noclip 800, aim 900, hp 1200, victory 10000.
   after no-clip). Measured: 7.0 / 17.5 / 9.1 m in 1 s (none / speed / fly),
   fly stops at 25.0 m, HP hack 1500.
 - Speed hack 2.5 -> 3.0x (2026-10-28).
+- Speed hack also jumps 2.5x higher, 1.2 -> 3.1 m (`SPEED_HACK_JUMP`, a
+  height multiplier: the input's `jumpHeight`, jump speed x sqrt) (2026-11-05).
 
 ## 34. Money spots (2026-10-28)
 
@@ -1870,11 +1872,13 @@ body), with the preview's pose.
 
 ## 55. Crouching (2026-10-31)
 
-- Hold Ctrl (left or right) to crouch. Ctrl key combos are swallowed while
-  the mouse is captured (`preventDefault`), so e.g. Ctrl+D doesn't
-  bookmark. (Browsers don't let a page block Ctrl+W on Windows/Linux:
-  crouch + W there closes the tab unless the game is fullscreen. On macOS
-  Ctrl+W does nothing.)
+- Hold Ctrl or Shift (left or right) to crouch. Ctrl key combos are swallowed
+  while the mouse is captured (`preventDefault`), so e.g. Ctrl+D doesn't
+  bookmark. Browsers don't let a page block Ctrl+W on Windows/Linux, so
+  Ctrl crouch + W there closes the tab (on macOS Ctrl+W does nothing).
+  Hence Shift (and Alt for the aim hack, moved off Shift; Alt keyup is
+  swallowed too so Windows doesn't focus the browser menu), and a `beforeunload` "Leave site?" prompt while in a
+  match so an accidental Ctrl+W can be cancelled.
 - Animations: 5 new Mixamo rifle clips in `fbx/Character Animation/`
   (Crouch Idle, Crouch Walk Forward / Backward / Left / Right) converted
   as `crouch_idle`, `crouch_forward` ... (`convert_assets.py` CLIPS;
