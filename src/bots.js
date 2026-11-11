@@ -264,7 +264,7 @@ class Bot {
 
     const fast = hasHack(p.hack, 'speed');
     this.server.world.stepPlayer(p, {
-      forward: move ? 1 : 0, right: 0, jump: this.jump, yaw: move ?? 0,
+      forward: move !== null ? 1 : 0, right: 0, jump: this.jump, yaw: move ?? 0, // (move 0: due north)
       speed: (WEAPONS[p.weapon].moveSpeed ?? 1) * (fast ? SPEED_HACK : 1), jumpHeight: fast ? SPEED_HACK_JUMP : 1,
     }, dt);
     this.jump = false;
