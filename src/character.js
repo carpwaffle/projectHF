@@ -11,6 +11,12 @@
 //     every gun; the pistol's two-handed aim goes on the upper body),
 //     cross-faded with the standing ones.
 //   - Airborne: jump loop clip.  Death: death clip, played once.
+//   - Knife: Mixamo's boxing guard and swing on the upper body over the
+//     usual legs (the spine kept upright as standing, whatever the legs do);
+//     the swing's fist pushed out a little (IK), the knife in an icepick
+//     grip; the left fist lowered out of the first-person view.
+//   - Ladders (state.climbing): the climb clip, its speed following the
+//     vertical speed (backwards going down); the gun is put away.
 //   - Aim: the spine bends with the player's pitch, so the rifle and head
 //     follow where they're looking.
 //   - Rifle: attached to the right hand. Its offset is calibrated from the
@@ -33,11 +39,12 @@
 
 import * as THREE from 'three';
 import { clone as cloneSkinned } from 'three/addons/utils/SkeletonUtils.js';
-import { PLAYER_HEIGHT, TEAMS, WEAPONS, FAST_CYCLE, MOVE_SPEED } from './shared.js';
+import { PLAYER_HEIGHT, TEAMS, WEAPONS, FAST_CYCLE, MOVE_SPEED, THROW_TIME, THROW_RELEASE } from './shared.js';
 import { SKINS, assets } from './assets.js';
-import { makeMuzzleFlash } from './effects.js';
+import { makeMuzzleFlash, makeSmokeBomb } from './effects.js';
 
 const LOCOMOTION = ['run_forward', 'run_backward', 'strafe_left', 'strafe_right'];
+const CLIMB_STEP = 0.6; // m climbed per rung sound
 const CROUCH_LOCO = ['crouch_forward', 'crouch_backward', 'crouch_left', 'crouch_right']; // (in LOCOMOTION's order)
 const RUN_ANIM_SPEED = 5; // m/s at which the run clips play at normal speed
 const CROUCH_ANIM_SPEED = 2.0; // ... and the crouch walk clips
@@ -51,12 +58,13 @@ const AIR_DELAY = 0.1; // seconds above the ground before the jump clip starts
 // Upper-body bones (three.js strips the dots: "UpperArm.L" -> "UpperArmL").
 const UPPER_BODY = /^(Abdomen|Torso|Neck|Head|Shoulder|UpperArm|LowerArm|Palm|Fingers|Thumb)/;
 const ARMS = /^(Shoulder|UpperArm|LowerArm|Palm|Fingers|Thumb)/;
+const RIGHT_ARM = /^(Shoulder|UpperArm|LowerArm|Palm|Fingers|Thumb\d)R\./;
 // The mixer averages actions by weight, so to make the reload win on the
 // upper body (over the full-body locomotion clips) it gets a heavy weight.
 const RELOAD_WEIGHT = 12;
 const upperBodyClips = {}; // gender/clip -> clip with only the upper-body tracks
 
-// bones: which tracks to keep (UPPER_BODY, or ARMS only).
+// bones: which tracks to keep (UPPER_BODY, ARMS or RIGHT_ARM only).
 function upperBodyClip(gender, clip, bones = UPPER_BODY) {
   const key = `${gender}/${clip.name}/${bones.source}`;
   upperBodyClips[key] ??= new THREE.AnimationClip(
@@ -83,8 +91,24 @@ const POUCH = V(-0.22, 0.95, -0.05); // left hip, in the body's space (it faces 
 // shotgun's shells); slide: slides out of / into the gun at the ends of
 // each held window (magazines).
 // tilt: how far the gun turns toward the hand (radians, muzzle up / roll).
-// set: which animation set holds it ('rifle': the rifle clips, 'pistol').
+// set: which animation set holds it ('rifle': the rifle clips, 'pistol',
+// 'knife'). melee: swung, not aimed (see fire()).
 const GUNS = {
+  knife: {
+    set: 'knife',
+    melee: true,
+    rightGrip: V(0, 0, 0), // the middle of the handle (the model's origin)
+    leftGrip: V(0, 0, 0), // (unused: the left hand stays in its guard)
+    muzzle: V(0, 0, -0.2), // the tip
+  },
+  // The smoke bomb (not a weapon: taken out with C), held in the fist like the knife.
+  smoke: {
+    set: 'knife',
+    grenade: true,
+    rightGrip: V(0, 0, 0),
+    leftGrip: V(0, 0, 0),
+    muzzle: V(0, 0, -0.06),
+  },
   rifle: {
     set: 'rifle',
     rightGrip: RIFLE_GRIP,
@@ -190,10 +214,48 @@ const GUNS = {
 export const MUZZLE = GUNS.rifle.muzzle;
 
 // Animation sets: the clips each holding style uses.
+// The knife's legs are the rifle's (its guard goes on the upper body: KNIFE_GUARD).
 const SETS = {
   rifle: { idle: 'idle', loco: LOCOMOTION, jump: 'jump_loop' },
   pistol: { idle: 'pistol_idle', loco: LOCOMOTION.map((n) => `pistol_${n}`), jump: 'pistol_jump_loop' },
+  knife: { idle: 'knife_idle', loco: LOCOMOTION, jump: 'jump_loop' },
 };
+// Knife: the boxing guard over the upper body (whatever the legs do), and
+// the swing over that while attacking, sped up to SWING_TIME, the fist
+// pushed out a little further (KNIFE_REACH).
+const KNIFE_GUARD = 12;
+const KNIFE_SWING = 24;
+// The smoke bomb: held out in front of the chest (throw_hold: the throw
+// clip's opening, before the pin) instead of the knife's guard, then thrown
+// (the throw, or the running one when moving), on the upper body over the
+// legs, sped up to THROW_TIME; the bomb leaves the hand THROW_RELEASE into it.
+const THROW_WEIGHT = 24;
+const SMOKE_HOLD = [0.17, 0.08, -0.32]; // m from the chest (character space: right, up, forward) the hand holds the smoke bomb
+const SMOKE_IN_VIEW = [0.19, -0.13, -0.34]; // m from the camera (right, up, forward) the hand holds the smoke bomb in first person
+const THROW_TURN = THREE.MathUtils.degToRad(32); // the throw clips' upper body is turned ~40 degrees left all through (made for a thrower standing side-on): turned back right this much (the head kept forward)
+const SMOKE_ELBOW = [0.45, -0.5, -0.05]; // m from the chest (right, up, forward) the elbow points toward: down and out (the hold clip's wind-up has it up high)
+const SWING_TIME = 0.6; // seconds (the knife's cooldown)
+const SWING_TIME_MIN = 0.05; // ... sped up to the time between swings when they come faster (the rapid-melee hack)
+const KNIFE_IN_FIST = 0.03; // m the handle sits back from the curled fingers' middle (toward the wrist)
+const KNIFE_REACH = [0.2, 0.12]; // m the fist is pushed up and out along the view at the height of a swing
+const KNIFE_ARM_MAX = 0.9; // share of the arm's full length the fist reaches out to (the elbow never locks straight: it looked stretched)
+const KNIFE_SWEEP = [0.28, 0.28]; // m the fist winds out to the right, then sweeps across to the left (a wider arc than the hook's)
+// ... and the upper body turns with it (radians about up: right on the
+// wind-up, left on the follow-through, carrying the arm across to the left
+// edge of the view), the head turned back so it keeps looking ahead.
+const KNIFE_TURN = [0.25, 0.8];
+const KNIFE_TURN_ABDOMEN = 0.4; // share of the turn in the lower spine (the rest in the chest)
+const KNIFE_REACH_TIME = 0.7; // ... out and back over this much of the swing
+// The right forearm turned about its length from the clips' (radians; the
+// wrist stays as the clips bend it, less KNIFE_STRAIGHTEN of it): in the
+// guard the back of the hand toward the view, the knife pointing ~45° to the
+// front right; through the swing (blended with KNIFE_REACH's out and back),
+// turned back a little so the blade trails out to the right, its flat
+// toward the view, as the hook swipes the fist from right to left.
+const KNIFE_TWIST = { guard: -0.8, swing: -0.2 };
+const KNIFE_STRAIGHTEN = 0.3; // share of the clips' wrist bend taken out (the hook bends it ~50°)
+const KNIFE_LEFT_DROP = new THREE.Vector3(0.05, -0.3, 0.08); // m the left fist comes down from the clips' (character space: in, down, back)
+const KNIFE_LEFT_SWAY = 0.06; // m the left fist swings forward and back with the run cycle (at full speed)
 // Pistol-style firing (run-firing): while shooting, the pistol idle's
 // two-handed aim on the arms, over whatever the body is doing. Arms only:
 // with the idle's spine too, the chest turned away from the run's, and the
@@ -233,6 +295,7 @@ const gripRest = {};
 const VIEW_EYE = {
   rifle: [-0.14, -0.04, 0.18],
   pistol: [-0.13, 0.05, 0.12],
+  knife: [-0.25, 0.05, -0.05], // (the guard fist lower right, off the crosshair, not so close the blade hides behind it; the swing still in view)
 };
 const _eyePoint = new THREE.Vector3();
 const _eyeOffset = new THREE.Vector3();
@@ -259,7 +322,9 @@ function makeMagazine() {
 
 export function makeGun(id) {
   let gun;
-  if (id === 'rifle') {
+  if (id === 'smoke') {
+    gun = makeSmokeBomb();
+  } else if (id === 'rifle') {
     gun = assets.guns.rifle.clone();
     gun.userData.mag = makeMagazine();
     gun.add(gun.userData.mag);
@@ -355,7 +420,7 @@ export class Character {
     const clips = assets.clips[this.gender];
     this.actions = {};
     const setClips = Object.values(SETS).flatMap((set) => [set.idle, ...set.loco, set.jump]);
-    for (const name of [...setClips, 'crouch_idle', ...CROUCH_LOCO, 'death']) {
+    for (const name of [...setClips, 'crouch_idle', ...CROUCH_LOCO, 'death', 'climb']) {
       const action = this.mixer.clipAction(clips[name]);
       action.setEffectiveWeight(0).play();
       this.actions[name] = action;
@@ -364,7 +429,11 @@ export class Character {
       for (const name of set.loco) this.actions[name].timeScale = 0; // driven by this.phase
     }
     for (const name of CROUCH_LOCO) this.actions[name].timeScale = 0;
+    // (The pistol's mid-air pose: the jump's apex, only two frames long;
+    // looped, it flicked between them ~15 times a second. Held on its first.)
+    this.actions.pistol_jump_loop.timeScale = 0;
     this.crouch = 0; // 0 = standing .. 1 = crouched (eased)
+    this.climbBlend = 0; // 0 .. 1 = on a ladder (eased)
     this.hunchShift = new THREE.Vector3(); // how far the crouch's hunch moved the head (character space; see straightenSpine)
     this.actions.death.setLoop(THREE.LoopOnce, 1);
     this.actions.death.clampWhenFinished = true;
@@ -378,6 +447,39 @@ export class Character {
     fire.setEffectiveWeight(0).play();
     this.actions.pistol_fire = fire;
     this.pistolBlend = 0; // 0 = rifle set, 1 = pistol set (cross-faded on switching)
+    this.knifeBlend = 0; // ... 1 = knife set
+    const guard = this.mixer.clipAction(upperBodyClip(this.gender, clips.knife_idle));
+    guard.setEffectiveWeight(0).play();
+    this.actions.knife_guard = guard;
+    const swing = this.mixer.clipAction(upperBodyClip(this.gender, clips.knife_swing));
+    swing.setLoop(THREE.LoopOnce, 1);
+    swing.clampWhenFinished = true;
+    swing.timeScale = swing.getClip().duration / SWING_TIME;
+    swing.setEffectiveWeight(0).play();
+    this.actions.knife_swing = swing;
+    // (The right arm only: the clip's body is already turned into the throw,
+    // facing left, and its left arm out for balance with it; the left fist
+    // comes down by the chest as with the knife, see lowerLeftHand.)
+    const hold = this.mixer.clipAction(upperBodyClip(this.gender, clips.throw_hold, RIGHT_ARM));
+    hold.timeScale = 0; // (held still on its first frame: looped, its few frames jolted)
+    hold.setEffectiveWeight(0).play();
+    this.actions.throw_hold = hold;
+    this.smokeHold = 0; // 1 = holding the smoke bomb (cross-faded)
+    for (const name of ['throw', 'throw_run']) {
+      const action = this.mixer.clipAction(upperBodyClip(this.gender, clips[name]));
+      action.setLoop(THREE.LoopOnce, 1);
+      action.clampWhenFinished = true;
+      action.timeScale = action.getClip().duration / THROW_TIME;
+      action.setEffectiveWeight(0).play();
+      this.actions[name] = action;
+    }
+    this.throwAt = -1e9; // performance.now() of the last smoke bomb throw
+    this.throwName = 'throw';
+    this.throwBlend = 0;
+    this.swingAt = -1e9; // performance.now() of the last swing
+    this.swingTime = SWING_TIME; // seconds the current swing takes
+    this.fade = 1; // see setFade
+    this.swingBlend = 0;
     this.fireAt = -1e9; // performance.now() of the last shot (pistol firing pose)
     this.slideStart = -1e9;
 
@@ -386,6 +488,7 @@ export class Character {
     this.rifleHolder = new THREE.Group();
     this.bones.rightHand.add(this.rifleHolder);
     this.calibrateGrip('pistol');
+    this.calibrateGrip('knife');
     this.calibrateGrip('rifle'); // (last: leaves the rifle idle pose for the magazine calibration)
     this.setWeapon('rifle');
     this.calibrateMagazine();
@@ -449,6 +552,7 @@ export class Character {
     if (this.gun) this.rifleHolder.remove(this.gun);
     this.gun = this.guns[id] ??= makeGun(id);
     this.rifleHolder.add(this.gun);
+    if (this.fade < 1) this.applyFade(); // (a new gun's materials)
     this.weaponId = id;
     this.boltStart = -1e9;
     this.slideStart = -1e9;
@@ -476,7 +580,8 @@ export class Character {
     const fingers = hand.children.find((c) => c.isBone);
     const centre = fingers ? palm.lerp(new THREE.Vector3().setFromMatrixPosition(fingers.matrixWorld), 0.5) : palm;
     const grip = Object.values(GUNS).find((g) => g.set === set).rightGrip;
-    const gunWorld = new THREE.Matrix4().makeTranslation(centre.sub(grip)); // facing -Z, upright
+    const gunWorld = new THREE.Matrix4().makeTranslation(centre.clone().sub(grip)); // facing -Z, upright
+    if (set === 'knife') gunWorld.multiply(this.knifeInFist(centre));
     gripOffsets[this.gender][set] = hand.matrixWorld.clone().invert().multiply(gunWorld);
     gripRest[this.gender] ??= {};
     // The idle's wrists are the natural ones: how each forearm runs into its
@@ -486,7 +591,7 @@ export class Character {
     const forearm = (lower, hand) => new THREE.Vector3().subVectors(hand.getWorldPosition(new THREE.Vector3()), lower.getWorldPosition(new THREE.Vector3()))
       .normalize().applyQuaternion(hand.getWorldQuaternion(new THREE.Quaternion()).invert());
     gripRest[this.gender][set] = {
-      grip: this.object.worldToLocal(centre.add(grip)),
+      grip: this.object.worldToLocal(centre.clone()), // (where the gun's grip point sits: the hand's centre)
       shoulder: this.object.worldToLocal(this.bones.rightUpper.getWorldPosition(new THREE.Vector3())),
       chest: this.object.worldToLocal(this.bones.torso.getWorldPosition(new THREE.Vector3())),
       chestYaw: this.chestYaw(),
@@ -498,7 +603,24 @@ export class Character {
       forearmR: forearm(this.bones.rightLower, this.bones.rightHand),
       forearmL: forearm(this.bones.leftLower, this.bones.leftHand),
       leftInGun: this.bones.leftHand.getWorldQuaternion(new THREE.Quaternion()),
+      // The lowest spine bone's turn (character space).
+      hipsQ: this.object.quaternion.clone().invert().multiply(this.bones.hips.getWorldQuaternion(new THREE.Quaternion())),
     };
+  }
+
+  // The knife in the fist (world turn, and its offset from `centre`), for
+  // calibrateGrip: an icepick grip, the handle through the curled fingers
+  // (between the knuckles, the fingertips and the palm) and the blade out of
+  // the little-finger side, its edge toward the knuckles.
+  knifeInFist(centre) {
+    const hand = this.bones.rightHand;
+    const p = (name) => hand.getObjectByName(name).getWorldPosition(new THREE.Vector3());
+    const along = p('FingersR').sub(p('PalmR')).normalize(); // along the hand, toward the knuckles
+    const thumb = p('Thumb1R').sub(p('MiddleHandR'));
+    const z = thumb.addScaledVector(along, -thumb.dot(along)).normalize(); // the knife's forward (-Z) is out of the little finger
+    const y = along.clone(); // its edge (-Y) toward the knuckles
+    const hole = p('FingersR').lerp(p('FingersR_end'), 0.5).addScaledVector(along, -KNIFE_IN_FIST);
+    return new THREE.Matrix4().makeBasis(new THREE.Vector3().crossVectors(y, z), y, z).setPosition(hole.sub(centre));
   }
 
   // How the magazine sits in the left hand: in the palm (between the hand
@@ -560,8 +682,9 @@ export class Character {
   // After update().
   placeEyes(eye, yaw, pitch) {
     this.bones.head.getWorldPosition(_eyePoint);
-    const k = this.pistolBlend;
-    const [side, up, forward] = VIEW_EYE.rifle.map((r, i) => r + (VIEW_EYE.pistol[i] - r) * k);
+    const p = this.pistolBlend;
+    const kn = this.knifeBlend;
+    const [side, up, forward] = VIEW_EYE.rifle.map((r, i) => r * (1 - p - kn) + VIEW_EYE.pistol[i] * p + VIEW_EYE.knife[i] * kn);
     _eyePoint.add(_eyeOffset.set(side, up, -forward).applyEuler(_eyeEuler.set(pitch, yaw, 0, 'YXZ')));
     this.object.position.add(_eyeOffset.set(...eye).sub(_eyePoint));
     this.object.updateMatrixWorld(true);
@@ -571,7 +694,72 @@ export class Character {
     return this.gun.localToWorld(target.copy(this.gun.userData.points.muzzle));
   }
 
+  // The smoke bomb held out in front of the right side of the chest (IK: the
+  // hold clip's arm, made for a body already turned into the throw, put the
+  // hand across the face on our upright one). weight: 0..1.
+  holdSmoke(weight) {
+    if (weight < 0.01) return;
+    const { rightUpper: upper, rightLower: lower, rightHand: hand } = this.bones;
+    this.object.localToWorld(_target.copy(this.chestPos).add(_v.set(...SMOKE_HOLD)));
+    hand.getWorldPosition(_hp);
+    solveTwoBone(upper, lower, hand, _hp.lerp(_target, weight));
+    this.lowerSmokeElbow(weight);
+  }
+
+  // Swings the right elbow down toward SMOKE_ELBOW, around the shoulder-hand
+  // line (the hand stays put).
+  lowerSmokeElbow(weight) {
+    this.object.localToWorld(_target.copy(this.chestPos).add(_v.set(...SMOKE_ELBOW)));
+    swingElbow(this.bones.rightUpper, this.bones.rightLower, this.bones.rightHand, _target, weight);
+  }
+
+  // First person: the smoke bomb held up in view (lower right, in front of
+  // the camera) rather than at the chest, where the hold pose has it but the
+  // view can't see it. After placeEyes. eye: [x,y,z] (the camera).
+  holdSmokeInView(eye, yaw, pitch) {
+    const weight = this.smokeHold * (1 - this.throwBlend);
+    if (weight < 0.01) return;
+    const { rightUpper: upper, rightLower: lower, rightHand: hand } = this.bones;
+    _aimQ.setFromEuler(_euler.set(pitch, yaw, 0, 'YXZ'));
+    const target = _target.set(...SMOKE_IN_VIEW).applyQuaternion(_aimQ).add(_v.set(...eye));
+    hand.getWorldPosition(_hp);
+    solveTwoBone(upper, lower, hand, _hp.lerp(target, weight));
+    this.lowerSmokeElbow(weight);
+  }
+
+  // Throwing: the upper body turned back toward the facing by THROW_TURN
+  // (spread down the spine as the knife's turn is), the head kept forward.
+  // weight: 0..1.
+  squareThrow(weight) {
+    if (weight < 0.001) return;
+    const turn = -THROW_TURN * weight; // (radians about up: + is to the left)
+    _axis.set(0, 1, 0);
+    rotateBoneWorld(this.bones.abdomen, _axis, turn * KNIFE_TURN_ABDOMEN);
+    rotateBoneWorld(this.bones.torso, _axis, turn * (1 - KNIFE_TURN_ABDOMEN));
+    rotateBoneWorld(this.bones.neck, _axis, -turn);
+  }
+
+  // A smoke bomb thrown (the running throw if moving).
+  throwSmoke(moving) {
+    this.throwAt = performance.now();
+    this.throwName = moving ? 'throw_run' : 'throw';
+    this.actions[this.throwName].reset().play();
+    this.onSound?.('swing', 0.8);
+  }
+
   fire() {
+    if (GUNS[this.weaponId].melee) {
+      // Faster than a swing takes (the rapid-melee hack: other players' hacks
+      // aren't known here), each one plays in the time since the last.
+      const now = performance.now();
+      this.swingTime = Math.min(SWING_TIME, Math.max(SWING_TIME_MIN, (now - this.swingAt) / 1000));
+      this.swingAt = now;
+      const swing = this.actions.knife_swing;
+      swing.timeScale = swing.getClip().duration / this.swingTime;
+      swing.reset().play();
+      this.onSound?.('swing', 1);
+      return;
+    }
     this.recoil = 1;
     this.gun.userData.flash.userData.fire();
     if (this.weaponId === 'sniper') this.boltStart = performance.now();
@@ -590,7 +778,7 @@ export class Character {
   update(dt, state) {
     if (dt <= 0) return;
     const pos = state.pos;
-    if (state.weapon !== undefined) this.setWeapon(WEAPONS[state.weapon]?.id ?? 'rifle');
+    if (state.weapon !== undefined) this.setWeapon(state.smoke ? 'smoke' : WEAPONS[state.weapon]?.id ?? 'rifle');
     this.fastCycle = !!state.fast; // infinite ammo hack (known for us and teammates)
     const now = performance.now();
 
@@ -617,8 +805,8 @@ export class Character {
     if (state.dead && !this.dead) this.actions.death.reset().play();
     this.dead = state.dead;
     this.deathBlend = this.dead ? damp(this.deathBlend, 1, 12, dt) : 0;
-    this.label.visible = !this.dead;
-    this.shield.visible = !!state.protected && !this.dead;
+    this.label.visible = !this.dead && this.fade > 0;
+    this.shield.visible = !!state.protected && !this.dead && this.fade > 0;
     if (this.shield.visible) this.shield.material.opacity = 0.1 + 0.07 * Math.sin(performance.now() / 120);
     const reloading = !!state.reloading && !this.dead;
     if (reloading && !this.reloading) {
@@ -661,6 +849,19 @@ export class Character {
       if (!this.dead && this.fallSpeed > 2) this.onSound?.('land', clamp(this.fallSpeed / 9, 0.5, 1.5));
       this.fallSpeed = 0;
     }
+    this.climbBlend = damp(this.climbBlend, state.climbing && !this.dead ? 1 : 0, 12, dt);
+    // On a ladder: a step on a rung every CLIMB_STEP climbed.
+    if (state.climbing && !this.dead) {
+      this.climbed = (this.climbed ?? 0) + Math.abs(v.y) * dt;
+      if (this.climbed > CLIMB_STEP) {
+        this.climbed = 0;
+        this.onSound?.('climb', 0.8);
+      }
+    }
+    if (this.climbBlend > 0.5) { // (not falling: no jump pose, no landing sound at the foot)
+      this.airborne = false;
+      this.fallSpeed = 0;
+    }
     this.air = damp(this.air, this.airborne && alive ? 1 : 0, 10, dt);
     this.crouch = damp(this.crouch, state.crouch && !this.dead ? 1 : 0, 14, dt);
     this.label.position.y = PLAYER_HEIGHT + 0.35 - CROUCH_LABEL_DROP * this.crouch;
@@ -668,7 +869,11 @@ export class Character {
     this.gun.userData.flash.userData.update(dt);
 
     // ---- clip weights ------------------------------------------------------
-    const living = 1 - this.deathBlend;
+    // (living: what's left for the usual poses and the gun, after dying and climbing)
+    const living = (1 - this.deathBlend) * (1 - this.climbBlend);
+    this.gun.visible = this.climbBlend < 0.5;
+    // About 0.8 m climbed per cycle of the clip.
+    this.actions.climb.timeScale = clamp(v.y / 0.8, -6, 6) * this.actions.climb.getClip().duration;
     const crouch = this.crouch * (1 - this.air);
     const ground = (1 - this.air) * living * (1 - crouch);
     const low = (1 - this.air) * living * crouch;
@@ -681,20 +886,33 @@ export class Character {
     LOCOMOTION.forEach((name, i) => { base[name] = this.move * ground * dirs[i]; });
     // The holding style's set, cross-faded when switching between styles.
     this.pistolBlend = damp(this.pistolBlend, GUNS[this.weaponId].set === 'pistol' ? 1 : 0, 12, dt);
+    this.knifeBlend = damp(this.knifeBlend, GUNS[this.weaponId].set === 'knife' ? 1 : 0, 12, dt);
+    this.swingBlend = damp(this.swingBlend, now - this.swingAt < this.swingTime * 1000 ? 1 : 0, 25, dt);
+    this.throwBlend = damp(this.throwBlend, now - this.throwAt < THROW_TIME * 1000 ? 1 : 0, 20, dt);
+    this.smokeHold = damp(this.smokeHold, this.weaponId === 'smoke' ? 1 : 0, 14, dt);
+    // (The bomb's out of the hand once thrown, until it's put away.)
+    if (this.weaponId === 'smoke' && now - this.throwAt > THROW_TIME * THROW_RELEASE * 1000 && now - this.throwAt < 2500) this.gun.visible = false;
     const firing = clamp(1 - ((now - this.fireAt) / 1000 - FIRE_HOLD) / 0.25, 0, 1); // held, then fades
     const w = {
       death: this.deathBlend,
+      climb: this.climbBlend * (1 - this.deathBlend),
       reload: this.weaponId === 'rifle' ? RELOAD_WEIGHT * this.reloadBlend * living : 0,
       // (crouched: the pistol's aim over the crouch clips, which hold a rifle)
       pistol_fire: FIRE_WEIGHT * Math.max(firing, crouch) * this.pistolBlend * living,
       crouch_idle: (1 - this.move) * low,
+      knife_guard: KNIFE_GUARD * this.knifeBlend * living * (1 - this.swingBlend) * (1 - this.throwBlend) * (1 - this.smokeHold),
+      throw_hold: THROW_WEIGHT * this.smokeHold * living * (1 - this.throwBlend),
+      throw: THROW_WEIGHT * this.throwBlend * living * (this.throwName === 'throw' ? 1 : 0),
+      throw_run: THROW_WEIGHT * this.throwBlend * living * (this.throwName === 'throw_run' ? 1 : 0),
+      knife_swing: KNIFE_SWING * this.knifeBlend * living * this.swingBlend,
     };
     CROUCH_LOCO.forEach((name, i) => { w[name] = this.move * low * dirs[i]; });
-    for (const [setName, set] of Object.entries(SETS)) {
-      const k = setName === 'pistol' ? this.pistolBlend : 1 - this.pistolBlend;
-      w[set.idle] = base.idle * k;
-      w[set.jump] = base.jump * k;
-      set.loco.forEach((name, i) => { w[name] = base[LOCOMOTION[i]] * k; });
+    const share = { rifle: Math.max(0, 1 - this.pistolBlend - this.knifeBlend), pistol: this.pistolBlend, knife: this.knifeBlend };
+    for (const [setName, set] of Object.entries(SETS)) { // (the knife shares the rifle's legs: added up)
+      const k = share[setName];
+      w[set.idle] = (w[set.idle] ?? 0) + base.idle * k;
+      w[set.jump] = (w[set.jump] ?? 0) + base.jump * k;
+      set.loco.forEach((name, i) => { w[name] = (w[name] ?? 0) + base[LOCOMOTION[i]] * k; });
     }
     for (const [name, weight] of Object.entries(w)) this.actions[name].setEffectiveWeight(weight);
 
@@ -724,7 +942,18 @@ export class Character {
       this.actions[name].time = this.phase * this.actions[name].getClip().duration;
     }
 
+    // The mixer only writes a bone when its blended value changed since the
+    // last frame, so while the clips hold still (in the air: the jump loop's
+    // flat stretches) last frame's aiming, IK and foot fixes stayed on the
+    // bones and were added again on top, every frame: looking up or down
+    // while flying, the spine curled further and further, then snapped back
+    // when the clip moved (the gun shook). Each frame starts from the pose
+    // the clips last gave.
+    this.cleanPose ??= [];
+    if (!this.cleanPose.length) this.model.traverse((o) => { if (o.isBone) this.cleanPose.push([o, o.quaternion.clone(), o.position.clone()]); });
+    else for (const [bone, q, p] of this.cleanPose) { bone.quaternion.copy(q); bone.position.copy(p); }
     this.mixer.update(dt);
+    for (const [bone, q, p] of this.cleanPose) { q.copy(bone.quaternion); p.copy(bone.position); }
     this.object.updateMatrixWorld(true);
     // Each clip puts the feet at its own shins' ends, but blending two clips
     // (changing direction, starting, stopping) mixes the feet's positions and
@@ -734,7 +963,8 @@ export class Character {
       foot.parent.worldToLocal(shinEnd.getWorldPosition(foot.position));
       foot.updateMatrixWorld(true);
     }
-    this.straightenSpine(crouch * living);
+    this.straightenSpine(crouch * living * (1 - this.knifeBlend));
+    this.uprightSpine(this.knifeBlend * living);
     // Where the clips put the chest (before aiming bends the spine): the gun follows it.
     this.object.worldToLocal(this.bones.torso.getWorldPosition(this.chestPos));
     const chestYaw = this.chestYaw();
@@ -754,11 +984,18 @@ export class Character {
     this.gun.rotation.set(0, 0, 0);
     // (Neither while the rifle's reload clip moves the rifle in the hand.)
     const clipReload = this.weaponId === 'rifle' ? this.reloadBlend : 0;
-    this.holdGun(state.yaw, (state.pitch + this.recoil * 0.08) * living, chestYaw, living * (1 - clipReload));
+    // (Not the knife: it stays as the fist holds it.)
+    const aimed = living * (1 - this.knifeBlend);
+    this.holdGun(state.yaw, (state.pitch + this.recoil * 0.08) * living, chestYaw, aimed * (1 - clipReload));
     this.gun.updateMatrixWorld(true);
     // Guns with a procedural reload: gun tilt, bolt / slide; null otherwise.
     const proc = this.gun.userData.points.reload ? this.poseGun(now) : null;
-    this.aimGun(state.yaw, state.pitch + this.recoil * 0.08, living * (1 - clipReload));
+    this.aimGun(state.yaw, state.pitch + this.recoil * 0.08, aimed * (1 - clipReload));
+    // (The knife's arms: not while holding or throwing the smoke bomb.)
+    const knifeArms = this.knifeBlend * living * (1 - this.throwBlend) * (1 - this.smokeHold);
+    this.extendKnife(state.yaw, state.pitch * living, now, knifeArms);
+    this.holdSmoke(this.smokeHold * living * (1 - this.throwBlend));
+    this.squareThrow(this.throwBlend * living);
     this.gun.updateMatrixWorld(true);
 
     // ---- left hand IK onto the gun (rifle: blended out while the reload clip
@@ -767,7 +1004,7 @@ export class Character {
     // On the gun (blended out while a procedural reload moves the hand), the
     // hand is also turned the way the idle holds it on the gun, with the
     // elbow swung round to keep the wrist as straight as there.
-    const ik = living > 0.5 ? (proc ? 1 : 1 - this.reloadBlend) : 0;
+    const ik = living > 0.5 ? (proc ? 1 : 1 - this.reloadBlend) * (1 - this.knifeBlend) : 0;
     const onGun = !proc || proc.progress < 0 || proc.progress >= this.gun.userData.points.reload.path.at(-1)[0];
     this.leftLock = damp(this.leftLock ?? 1, onGun ? 1 : 0, 10, dt);
     if (ik > 0.001) {
@@ -794,12 +1031,15 @@ export class Character {
         upper.updateMatrixWorld(true);
       }
     }
+    // Knife: the left fist down by the chest, out of the first-person view.
+    const leftDown = this.knifeBlend * living * (1 - this.throwBlend); // (the knife's guard, and holding the smoke bomb)
+    if (leftDown > 0.001) this.lowerLeftHand(leftDown);
     relaxWristTwist(this.bones.leftLower, this.bones.leftHand, WRIST_TWIST_TO_FOREARM);
 
     // ---- magazine ----------------------------------------------------------
     if (proc) {
       this.updateGunMagazine(proc.progress);
-    } else {
+    } else if (this.gun.userData.mag) { // (the rifle's; the knife has none)
       const reload = this.actions.reload;
       this.updateMagazine(this.reloading ? reload.time / reload.getClip().duration : 1);
     }
@@ -810,7 +1050,32 @@ export class Character {
     this.shadow.position.y = 0.015 - height;
     this.shadow.scale.setScalar(0.6 + 0.4 * fade);
     this.shadow.material.opacity = SHADOW_OPACITY * fade;
-    this.shadow.visible = this.deathBlend < 0.5 && fade > 0;
+    this.shadow.visible = this.deathBlend < 0.5 && fade > 0 && this.fade > 0;
+  }
+
+  // How visible the character is (the fake-lag hack): 1 as normal, 0 hidden
+  // (model, gun, shadow, name), in between see-through. The materials are
+  // shared by every copy of the model: see-through, this one draws with its
+  // own copies (made the first time each mesh is seen: guns come later).
+  setFade(alpha) {
+    if (alpha === this.fade) return;
+    this.fade = alpha;
+    this.model.visible = alpha > 0;
+    this.applyFade();
+  }
+
+  applyFade() {
+    if (this.fade <= 0 || (this.fade >= 1 && !this.fadeMaterials)) return;
+    this.fadeMaterials ??= new Map(); // mesh -> [own material(s), see-through copies]
+    const copy = (m) => (m.blending === THREE.AdditiveBlending ? m : Object.assign(m.clone(), { transparent: true })); // (not the muzzle flash)
+    this.model.traverse((o) => {
+      if (!o.isMesh || this.fadeMaterials.has(o)) return;
+      this.fadeMaterials.set(o, [o.material, Array.isArray(o.material) ? o.material.map(copy) : copy(o.material)]);
+    });
+    for (const [mesh, [own, faded]] of this.fadeMaterials) {
+      mesh.material = this.fade < 1 ? faded : own;
+      for (const m of [faded].flat()) if (m.blending !== THREE.AdditiveBlending) m.opacity = this.fade;
+    }
   }
 
   // The crouch clips bend the upper body well forward (30-45 degrees) and
@@ -856,6 +1121,72 @@ export class Character {
     this.object.worldToLocal(head.getWorldPosition(this.hunchShift)).negate();
     rotateBoneWorld(this.bones.torso, _axis.set(1, 0, 0).transformDirection(this.object.matrixWorld), -CROUCH_HUNCH * weight);
     this.hunchShift.add(this.object.worldToLocal(head.getWorldPosition(_w)));
+  }
+
+  // Knife: the boxing clips' upper body sits on the legs' pelvis, which
+  // leans forward running and turns aside crouching (the crouch clips hold
+  // a rifle), so the guard and swing went low or off to the right. Turn the
+  // lowest spine bone as in the knife's standing idle instead, whatever the
+  // legs do. weight: 0..1.
+  uprightSpine(weight) {
+    if (weight < 0.001) return;
+    const hips = this.bones.hips;
+    _wantQ.copy(this.object.quaternion).multiply(gripRest[this.gender].knife.hipsQ);
+    setBoneWorldQuaternion(hips, hips.getWorldQuaternion(_hq).slerp(_wantQ, weight));
+  }
+
+  // Knife: the right forearm turned by KNIFE_TWIST (the wrist eased by
+  // KNIFE_STRAIGHTEN), and while swinging the fist pushed up and out along
+  // the view (KNIFE_REACH, out and back) and swept from right to left
+  // (KNIFE_SWEEP), the upper body turning with it (KNIFE_TURN) for a wide
+  // arc. weight: 0..1.
+  extendKnife(yaw, pitch, now, weight) {
+    const u = (now - this.swingAt) / (this.swingTime * 1000 * KNIFE_REACH_TIME);
+    const out = Math.sin(Math.PI * clamp(u, 0, 1)); // 0 .. 1 .. 0 through the swing
+    const s = Math.sin(2 * Math.PI * clamp(u, 0, 1)); // > 0: winding up to the right, < 0: following through to the left
+    const turn = (s > 0 ? -KNIFE_TURN[0] : -KNIFE_TURN[1]) * s * weight; // (radians about up: + is to the left)
+    if (Math.abs(turn) > 0.001) {
+      _axis.set(0, 1, 0);
+      rotateBoneWorld(this.bones.abdomen, _axis, turn * KNIFE_TURN_ABDOMEN);
+      rotateBoneWorld(this.bones.torso, _axis, turn * (1 - KNIFE_TURN_ABDOMEN));
+      rotateBoneWorld(this.bones.neck, _axis, -turn);
+    }
+    if (weight > 0.001) {
+      const { rightLower: lower, rightHand: hand } = this.bones;
+      _axis.subVectors(hand.getWorldPosition(_hp), lower.getWorldPosition(_w)).normalize(); // the forearm
+      hand.getObjectByName('FingersR').getWorldPosition(_t).sub(_hp).normalize(); // the hand
+      rotateBoneByWorldQuat(hand, _q2.setFromUnitVectors(_t, _axis).slerp(_identity, 1 - KNIFE_STRAIGHTEN * weight));
+      rotateBoneWorld(lower, _axis, (KNIFE_TWIST.guard + (KNIFE_TWIST.swing - KNIFE_TWIST.guard) * out) * weight);
+    }
+    const reach = out * weight;
+    if (reach < 0.001) return;
+    const { rightUpper: upper, rightLower: lower, rightHand: hand } = this.bones;
+    _aimQ.setFromEuler(_euler.set(pitch, yaw, 0, 'YXZ'));
+    // Out to the right in the first half, across to the left in the second (0 at both ends).
+    const sweep = s * KNIFE_SWEEP[s > 0 ? 0 : 1] * weight;
+    hand.getWorldPosition(_target).add(_v.set(sweep, KNIFE_REACH[0] * reach, -KNIFE_REACH[1] * reach).applyQuaternion(_aimQ));
+    const shoulder = upper.getWorldPosition(_w);
+    const arm = shoulder.distanceTo(lower.getWorldPosition(_hp)) + _hp.distanceTo(hand.getWorldPosition(_t));
+    _v.subVectors(_target, shoulder);
+    if (_v.length() > arm * KNIFE_ARM_MAX) _target.copy(shoulder).addScaledVector(_v.normalize(), arm * KNIFE_ARM_MAX);
+    solveTwoBone(upper, lower, hand, _target);
+  }
+
+  // Knife: IK the left fist down from where the clips put it (up by the
+  // chin) by KNIFE_LEFT_DROP, so it keeps their movement (the guard's bob,
+  // the swing's pull back), swinging with the run cycle too. weight: 0..1.
+  lowerLeftHand(weight) {
+    const { leftUpper: upper, leftLower: lower, leftHand: hand } = this.bones;
+    _upperQ.copy(upper.quaternion);
+    _lowerQ.copy(lower.quaternion);
+    this.object.worldToLocal(hand.getWorldPosition(_target)).add(KNIFE_LEFT_DROP);
+    _target.z += KNIFE_LEFT_SWAY * this.move * (1 - this.crouch * 0.5) * Math.sin(this.phase * Math.PI * 2);
+    solveTwoBone(upper, lower, hand, this.object.localToWorld(_target));
+    if (weight < 0.999) {
+      upper.quaternion.copy(_upperQ.slerp(upper.quaternion, weight));
+      lower.quaternion.copy(_lowerQ.slerp(lower.quaternion, weight));
+      upper.updateMatrixWorld(true);
+    }
   }
 
   // Which way the chest faces in character space (radians about up).
@@ -929,8 +1260,6 @@ export class Character {
     gun.position.copy(grip).sub(_v.copy(grip).applyQuaternion(gun.quaternion))
       .add(_v.set(0, 0, kick).applyQuaternion(gun.quaternion));
   }
-
-  // ---- procedural reloads, bolt and slide (sniper, pistol) -----------------
 
   // Gun tilt, bolt and slide for this frame; returns the reload progress
   // (-1 when not reloading) for the hand and the magazine.
@@ -1085,6 +1414,9 @@ export class Character {
   }
 
   dispose() {
+    for (const [, [own, faded]] of this.fadeMaterials ?? []) {
+      for (const m of [faded].flat()) if (!(Array.isArray(own) ? own : [own]).includes(m)) m.dispose();
+    }
     this.mixer.stopAllAction();
     this.mixer.uncacheRoot(this.model);
     // Geometry and materials are shared with the loaded assets; only the
@@ -1238,6 +1570,20 @@ function solveTwoBone(upper, lower, end, target) {
   rotateBoneByWorldQuat(upper, new THREE.Quaternion().setFromUnitVectors(_c, _t));
 }
 
+// Turns the upper arm around the shoulder-hand line so the elbow points
+// (weight: as far as) toward pole; the hand doesn't move.
+function swingElbow(upper, lower, end, pole, weight = 1) {
+  const S = upper.getWorldPosition(_a);
+  const axis = end.getWorldPosition(_t).sub(S).normalize();
+  const e = lower.getWorldPosition(_b).sub(S);
+  const p = _c.copy(pole).sub(S);
+  e.addScaledVector(axis, -e.dot(axis));
+  p.addScaledVector(axis, -p.dot(axis));
+  if (e.lengthSq() < 1e-8 || p.lengthSq() < 1e-8) return;
+  const angle = Math.atan2(_v.crossVectors(e, p).dot(axis), e.dot(p));
+  rotateBoneByWorldQuat(upper, _q.setFromAxisAngle(axis, angle * weight));
+}
+
 function makeLabel(text, color) {
   const canvas = document.createElement('canvas');
   canvas.width = 512;
@@ -1252,7 +1598,7 @@ function makeLabel(text, color) {
   ctx.strokeText(text, 256, 32);
   ctx.fillStyle = color;
   ctx.fillText(text, 256, 32);
-  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(canvas), depthTest: false }));
+  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(canvas), depthTest: false, depthWrite: false }));
   sprite.scale.set(3.2, 0.4, 1);
   sprite.position.y = PLAYER_HEIGHT + 0.35;
   return sprite;

@@ -4,7 +4,9 @@
 // A bot is an ordinary player in the HostServer (same movement physics,
 // shots, hits, money, pickups) with no connection: what the server sends it
 // arrives at Bot.onMessage, and it acts by calling the server's handlers
-// directly (onSpawn, onShoot, onReload). Bots never buy hacks.
+// directly (onSpawn, onShoot, onReload). When the host allows it (the buy
+// menu's toggle: BotManager.useHacks), bots buy hacks with their money too,
+// but never fly, no-clip (they walk the navigation graph) or victory.
 //
 // Movement: paths over the navigation graph (nav.js) to a goal: a heal pack
 // when hurt, a weapon spot while holding the pistol, a money spot, or
@@ -15,6 +17,7 @@
 import {
   eyeHeight, WEAPONS, DEFAULT_WEAPON, PICKUP_RADIUS,
   lookDir, spreadFor, spreadDir, fireCooldown, headCenter,
+  MAX_HP, hasHack, hackBit, hacksPrice, weaponPrice, startWeapon, hacksOffMask, RECOIL_HACK, SPEED_HACK, SPEED_HACK_JUMP,
 } from './shared.js';
 import { NavGraph } from './nav.js';
 
@@ -40,7 +43,17 @@ const PERCEIVE_EVERY = 0.1; // seconds
 const COAST = 0.4; // seconds a bot keeps walking while it waits for a new path
 const PATHS_PER_TICK = 1; // A* searches per host tick (all bots; long ones take a few ms)
 // Preferred distance to the target, per weapon (moves closer / backs off).
-const RANGE = { pistol: 16, revolver: 20, rifle: 24, p90: 14, shotgun: 6, sniper: 35 };
+const CHASE_REPLAN = 1; // s between path searches while chasing someone with the knife
+// Hacks.
+const GUN_HACKS = ['hp', 'wall', 'map', 'speed', 'recoil', 'ammo', 'wallbang', 'trigger', 'aim', 'fakelag'];
+const KNIFE_HACKS = ['hp', 'wall', 'map', 'speed', 'melee', 'wallbang', 'fakelag'];
+const HACK_SLOTS = 3; // most hacks per life when the room has no limit
+const HACK_CHANCE = 0.6; // each slot: chance it buys one
+const AIM_HACK_ERROR = 0.3; // aim hack: aim error multiplier (always at the head)...
+const AIM_HACK_SETTLE = 0.2; // ... settling this fast (weaker than a player's instant lock-on)
+const TRIGGER_REACTION = [0.06, 0.14]; // triggerbot: seconds from seeing an enemy to the first shot
+const WALLBANG_MEMORY = 1.5; // wallbang: seconds it keeps firing at a target gone behind cover
+const RANGE = { knife: 1.2, pistol: 16, revolver: 20, rifle: 24, p90: 14, shotgun: 6, sniper: 35 };
 
 const rand = ([a, b]) => a + Math.random() * (b - a);
 const angleDiff = (a, b) => Math.atan2(Math.sin(a - b), Math.cos(a - b));
@@ -55,6 +68,21 @@ export class BotManager {
     this.navLoading = null;
     this.nextId = 1;
     this.spotNodes = null; // per pickup spot: its nav node, or -1 if bots can't reach it
+    this.useHacks = true; // bots buy hacks (the host's toggle)
+  }
+
+  // The host's toggle. Off: bots lose the hacks they have now, too.
+  setHacks(on) {
+    this.useHacks = !!on;
+    if (this.useHacks) return;
+    for (const id of this.bots.keys()) {
+      const p = this.server.players.get(id);
+      if (!p) continue;
+      p.hack = 0;
+      p.spawnHack = 0;
+      p.maxHp = MAX_HP;
+      p.hp = Math.min(p.hp, MAX_HP);
+    }
   }
 
   // The host's pick in the buy menu.
@@ -172,7 +200,8 @@ class Bot {
     const p = this.player;
     if (!p) return;
     if (msg.t === 'buy') {
-      this.server.onSpawn(p, this.pickWeapon(msg.money), 0);
+      const weapon = this.pickWeapon(msg.money);
+      this.server.onSpawn(p, weapon, this.pickHacks(msg.money - weaponPrice(this.server.mode, weapon), weapon));
     } else if (msg.t === 'respawn') {
       p.vel = [0, 0, 0];
       p.onGround = false;
@@ -182,13 +211,29 @@ class Bot {
     }
   }
 
-  // Spend on a weapon (never a hack): usually one of the better ones it can
-  // afford, sometimes whatever.
+  // Spend on a weapon: usually one of the better ones it can afford,
+  // sometimes whatever. (Modes with set weapons: that one.)
   pickWeapon(money) {
+    if (this.server.mode.weapons) return startWeapon(this.server.mode);
     const affordable = WEAPONS.map((w, i) => i).filter((i) => i !== DEFAULT_WEAPON && WEAPONS[i].price <= money);
     if (!affordable.length || Math.random() < 0.15) return DEFAULT_WEAPON;
     affordable.sort((a, b) => WEAPONS[b].price - WEAPONS[a].price);
     return affordable[Math.floor(Math.random() * Math.min(3, affordable.length))];
+  }
+
+  // With what's left after the weapon: a few random hacks that suit it.
+  pickHacks(money, weapon) {
+    if (!this.manager.useHacks) return 0;
+    const off = hacksOffMask(this.server.mode);
+    const pool = (WEAPONS[weapon].melee ? KNIFE_HACKS : GUN_HACKS).filter((id) => !(hackBit(id) & off));
+    const slots = this.server.hackLimit || HACK_SLOTS;
+    let mask = 0;
+    for (let i = 0; i < slots && Math.random() < HACK_CHANCE; i++) {
+      const options = pool.filter((id) => !hasHack(mask, id) && hacksPrice(mask | hackBit(id)) <= money);
+      if (!options.length) break;
+      mask |= hackBit(options[Math.floor(Math.random() * options.length)]);
+    }
+    return mask;
   }
 
   // Returns true if it used a path search.
@@ -217,7 +262,11 @@ class Bot {
     if (this.target) this.shoot(now, p);
     else this.tidy(p);
 
-    this.server.world.stepPlayer(p, { forward: move ? 1 : 0, right: 0, jump: this.jump, yaw: move ?? 0 }, dt);
+    const fast = hasHack(p.hack, 'speed');
+    this.server.world.stepPlayer(p, {
+      forward: move ? 1 : 0, right: 0, jump: this.jump, yaw: move ?? 0,
+      speed: (WEAPONS[p.weapon].moveSpeed ?? 1) * (fast ? SPEED_HACK : 1), jumpHeight: fast ? SPEED_HACK_JUMP : 1,
+    }, dt);
     this.jump = false;
     this.checkStuck(now, p, move !== null);
     return searched;
@@ -229,49 +278,67 @@ class Bot {
     return [p.pos[0], p.pos[1] + eyeHeight(p.crouch), p.pos[2]];
   }
 
-  canSee(from, q) {
+  // q: { pos } (a player, or where they appear: see HostServer.apparent).
+  // smoke: whether smoke blocks the view (not with the wall hack).
+  canSee(from, q, smoke = true) {
     for (const h of [1.6, 1.1]) { // head, then chest
       const d = [q.pos[0] - from[0], q.pos[1] + h - from[1], q.pos[2] - from[2]];
       const dist = Math.hypot(...d);
       if (dist > SIGHT) return false;
+      if (smoke && this.server.smokeBlocks(from, [q.pos[0], q.pos[1] + h, q.pos[2]])) continue; // (smoke in the way)
       if (this.server.world.raycast(from, d.map((v) => v / dist), dist) >= dist - 0.05) return true;
     }
     return false;
   }
 
+  // The wall hack sees through smoke, and everyone in range whichever way
+  // it faces; with wallbang too it fights them through walls, otherwise it
+  // hunts them (chooseGoal).
   perceive(now, p) {
     const eye = this.eye(p);
+    const xray = hasHack(p.hack, 'wall');
+    const wallbang = hasHack(p.hack, 'wallbang');
     let best = null;
     let bestD = Infinity;
     for (const q of this.server.players.values()) {
       if (q.team === p.team || q.dead || now < q.protectedUntil) continue;
-      const dx = q.pos[0] - p.pos[0];
-      const dz = q.pos[2] - p.pos[2];
-      const d = Math.hypot(dx, dz, q.pos[1] - p.pos[1]);
+      const seen = this.server.apparent(q); // (a fake-lag player: their afterimage)
+      if (!seen) continue;
+      const dx = seen.pos[0] - p.pos[0];
+      const dz = seen.pos[2] - p.pos[2];
+      const d = Math.hypot(dx, dz, seen.pos[1] - p.pos[1]);
       if (d > SIGHT) continue;
       const facing = Math.abs(angleDiff(Math.atan2(-dx, -dz), p.yaw)) < FOV;
-      const known = q === this.target || q.id === this.hurtBy;
+      const known = q === this.target || q.id === this.hurtBy || xray;
       if (!facing && !known && d > NEAR) continue;
-      if (d < bestD && this.canSee(eye, q)) {
+      if (d < bestD && ((xray && wallbang) || this.canSee(eye, seen, !xray))) {
         best = q;
         bestD = d;
       }
     }
     this.hurtBy = null;
+    // Wallbang: keep firing a moment at a target that's just gone behind cover.
+    if (!best && wallbang && this.target && !this.target.dead && now - this.targetSeen < WALLBANG_MEMORY) {
+      this.visible = true;
+      return;
+    }
     this.visible = !!best;
     if (best) {
       if (best !== this.target) {
         // New target: react, then aim with an error that settles.
         const fresh = now - this.targetSeen > 1;
         this.target = best;
-        this.reactAt = now + (fresh ? rand(REACTION) : rand(REACTION) * 0.4);
+        const reaction = hasHack(p.hack, 'trigger') ? TRIGGER_REACTION : REACTION;
+        this.reactAt = now + (fresh ? rand(reaction) : rand(reaction) * 0.4);
         const s = () => (Math.random() < 0.5 ? -1 : 1);
-        this.err = [s() * rand(AIM_ERROR), s() * rand(AIM_ERROR) * 0.5];
-        this.aimHead = Math.random() < HEAD_CHANCE;
+        const aimHack = hasHack(p.hack, 'aim');
+        const e = aimHack ? AIM_HACK_ERROR : 1;
+        this.err = [s() * rand(AIM_ERROR) * e, s() * rand(AIM_ERROR) * 0.5 * e];
+        this.aimHead = aimHack || this.server.mode.headshotOnly || Math.random() < HEAD_CHANCE;
         this.strafeUntil = 0;
       }
       this.targetSeen = now;
-      this.lastSeenPos = [...best.pos];
+      this.lastSeenPos = [...(this.server.apparent(best)?.pos ?? best.pos)];
     } else if (this.target && (this.target.dead || now - this.targetSeen > 0.5)) {
       // Lost it: go where it was last seen.
       this.target = null;
@@ -303,10 +370,13 @@ class Bot {
     if (spot < 0 && p.weapon === DEFAULT_WEAPON) spot = nearestSpot((s) => s.kind === 'weapon');
     if (spot < 0 && Math.random() < 0.3) spot = nearestSpot((s) => s.kind === 'money' || s.kind === 'weapon');
     if (spot >= 0) return { node: spotNodes[spot], spot };
-    // Hunt: somewhere near a random living enemy (60%), or anywhere.
+    // Hunt: somewhere near a random living enemy (60%), or anywhere. With
+    // the map or wall hack (it knows where they are): near the nearest one.
     const enemies = [...this.server.players.values()].filter((q) => q.team !== p.team && !q.dead);
-    if (enemies.length && Math.random() < 0.6) {
-      const q = enemies[Math.floor(Math.random() * enemies.length)];
+    const tracking = hasHack(p.hack, 'map') || hasHack(p.hack, 'wall');
+    if (tracking) enemies.sort((a, b) => Math.hypot(a.pos[0] - p.pos[0], a.pos[2] - p.pos[2]) - Math.hypot(b.pos[0] - p.pos[0], b.pos[2] - p.pos[2]));
+    if (enemies.length && Math.random() < (tracking ? 0.9 : 0.6)) {
+      const q = enemies[tracking ? 0 : Math.floor(Math.random() * enemies.length)];
       const a = Math.random() * Math.PI * 2;
       const r = 4 + Math.random() * 10;
       const n = nav.nearest([q.pos[0] + Math.cos(a) * r, q.pos[1], q.pos[2] + Math.sin(a) * r]);
@@ -344,7 +414,9 @@ class Bot {
     }
     if (this.step >= this.path.length) return this.newGoal();
     const n = this.path[this.step];
-    if (Math.hypot(nav.x[n] - p.pos[0], nav.z[n] - p.pos[2]) > 4 || p.pos[1] < nav.y[n] - 1.5) {
+    // (Climbing a ladder: the next node is its top, high above.)
+    const climbing = p.climbing || (nav.ladder[n] && this.step > 0 && nav.ladder[this.path[this.step - 1]]);
+    if (Math.hypot(nav.x[n] - p.pos[0], nav.z[n] - p.pos[2]) > 4 || (!climbing && p.pos[1] < nav.y[n] - 1.5)) {
       this.path = null; // knocked off the path (fell, pushed): plan again
       this.wantPath = true;
       return null;
@@ -366,7 +438,7 @@ class Bot {
   // In a fight: strafe, and close in or back off to the weapon's range.
   // Never off a ledge: a step that leaves the walkable floor turns back.
   fightMove(now, p) {
-    const q = this.target;
+    const q = this.server.apparent(this.target) ?? this.target; // (where they appear)
     const dx = q.pos[0] - p.pos[0];
     const dz = q.pos[2] - p.pos[2];
     const dist = Math.hypot(dx, dz);
@@ -377,6 +449,21 @@ class Bot {
     }
     const want = RANGE[WEAPONS[p.weapon].id] ?? 18;
     const closer = dist > want * 1.3 ? 1 : dist < want * 0.6 ? -1 : 0;
+    // With the knife: straight at them (strafing only once in reach); round
+    // whatever's in the way (a car, a wall) along the navigation graph,
+    // re-planned every CHASE_REPLAN seconds as they move.
+    if (WEAPONS[p.weapon].melee && closer > 0) {
+      if (this.safeStep(p, toward)) return toward;
+      const { nav } = this.manager;
+      if (nav && !(now - this.chasedAt < CHASE_REPLAN)) {
+        this.chasedAt = now;
+        this.goal = null;
+        this.path = nav.path(nav.nearest(p.pos), nav.nearest(q.pos));
+        this.step = 0;
+      }
+      const yaw = this.followPath(now, p);
+      if (yaw !== null) return yaw;
+    }
     // Strafe direction (90° from the target) blended with closing in / backing off.
     let yaw = toward + this.strafe * (Math.PI / 2) * (closer === 0 ? 1 : closer > 0 ? 0.5 : 1.5);
     if (!this.safeStep(p, yaw)) {
@@ -398,7 +485,7 @@ class Bot {
   // Not making progress while trying to move: jump; still stuck: new plan.
   checkStuck(now, p, moving) {
     const s = this.stuckCheck;
-    if (!moving) {
+    if (!moving || p.climbing) {
       s.pos = null;
       return;
     }
@@ -430,13 +517,14 @@ class Bot {
   aim(now, dt, p) {
     let yaw;
     let pitch;
-    if (this.target) {
-      const q = this.target;
+    const seen = this.target && this.server.apparent(this.target); // (a fake-lag player: their afterimage)
+    if (seen) {
+      const q = seen;
       const eye = this.eye(p);
-      const at = this.aimHead ? headCenter(q.pos, this.server.seenBy()(q)) : [q.pos[0], q.pos[1] + 1.1, q.pos[2]];
+      const at = this.aimHead ? headCenter(q.pos, q.pose) : [q.pos[0], q.pos[1] + 1.1, q.pos[2]];
       const d = at.map((v, i) => v - eye[i]);
       // The error settles while tracking, down to a jitter.
-      const k = Math.exp(-dt / AIM_SETTLE);
+      const k = Math.exp(-dt / (hasHack(p.hack, 'aim') ? AIM_HACK_SETTLE : AIM_SETTLE));
       this.err = this.err.map((e) => e * k + (Math.random() - 0.5) * AIM_JITTER * 0.5);
       yaw = Math.atan2(-d[0], -d[2]) + this.err[0];
       pitch = Math.atan2(d[1], Math.hypot(d[0], d[2])) + this.err[1];
@@ -461,6 +549,14 @@ class Bot {
     const weapon = WEAPONS[p.weapon];
     if (now < this.reactAt || !this.onTarget || !this.visible) return;
     if (p.reloadEnd) return;
+    if (weapon.melee) { // only once in reach
+      const at = this.server.apparent(this.target)?.pos ?? this.target.pos;
+      if (Math.hypot(at[0] - p.pos[0], at[2] - p.pos[2]) > weapon.melee.range) return;
+      if (now < this.nextShot) return;
+      this.server.onShoot(p, { t: 'shoot', w: p.weapon, yaw: p.yaw, pitch: p.pitch });
+      this.nextShot = now + fireCooldown(weapon, p.hack);
+      return;
+    }
     if (p.ammo[p.weapon] <= 0) {
       this.server.onReload(p);
       return;
@@ -468,7 +564,7 @@ class Bot {
     const cooldown = fireCooldown(weapon, p.hack);
     if (now < this.nextShot) return;
     // Bursts at range with automatic weapons.
-    const dist = Math.hypot(...this.target.pos.map((v, i) => v - p.pos[i]));
+    const dist = Math.hypot(...(this.server.apparent(this.target)?.pos ?? this.target.pos).map((v, i) => v - p.pos[i]));
     if (weapon.auto && dist > 15) {
       if (now < this.burstPause) return;
       if (!this.burstEnd) this.burstEnd = now + rand(BURST);
@@ -479,7 +575,8 @@ class Bot {
       }
     }
     const speed = Math.hypot(p.vel?.[0] ?? 0, p.vel?.[2] ?? 0);
-    const aim = spreadDir(lookDir(p.yaw, p.pitch), spreadFor(weapon, speed, p.onGround ?? true));
+    // (Bots shoot as if scoped: the sniper's scoped spread.)
+    const aim = spreadDir(lookDir(p.yaw, p.pitch), spreadFor(weapon, speed, p.onGround ?? true, true) * (hasHack(p.hack, 'recoil') ? RECOIL_HACK : 1));
     const msg = { t: 'shoot', w: p.weapon, yaw: p.yaw, pitch: p.pitch };
     if (weapon.pellets) msg.ds = Array.from({ length: weapon.pellets }, () => spreadDir(aim, weapon.pelletSpread));
     else msg.d = aim;

@@ -1,4 +1,6 @@
-// Sound effects: gunshots, reloads, footsteps and landings.
+// Sound effects: gunshots, reloads, footsteps (on metal: catwalks, ladders,
+// the crane: their own recording), landings, hit confirmations and the smoke
+// bomb (bounces, the hiss of its smoke).
 //
 // Recorded sounds from sounds/ (see SOUND_FILES) are loaded when audio starts;
 // they're mixed to mono, trimmed of leading silence and normalised. Until
@@ -15,6 +17,7 @@
 const SOUND_FILES = {
   shot: { url: 'sounds/gunshot/gunshot.mp3' },
   step: { url: 'sounds/footsteps/footstep.mp3' },
+  stepMetal: { url: 'sounds/footsteps/metallic_footstep.mp3' },
   land: { url: 'sounds/landing/landing.mp3' },
   reload: {
     url: 'sounds/reload/reload.mp3',
@@ -48,12 +51,12 @@ const SHOTS = {
 };
 
 const VOLUME = {
-  shot: 0.9, magOut: 0.55, magIn: 0.6, boltBack: 0.55, boltForward: 0.7, step: 0.35, land: 0.6,
-  reloadPart: 0.7,
+  shot: 0.9, magOut: 0.55, magIn: 0.6, boltBack: 0.55, boltForward: 0.7, step: 0.35, stepMetal: 0.22, land: 0.6, swing: 0.5,
+  reloadPart: 0.7, hiss: 0.55, hitBody: 0.3, hitHead: 0.36, hitKill: 0.45,
 };
 // Pitch variation per play (recordings come one per sound, so this keeps
 // repeats from sounding identical).
-const PITCH_SPREAD = { shot: 0.06, step: 0.16, land: 0.1 };
+const PITCH_SPREAD = { shot: 0.06, step: 0.16, stepMetal: 0.16, land: 0.1, swing: 0.15, hitBody: 0.1, hitHead: 0.06, hitKill: 0.04 };
 // How far each sound carries: distance at full volume, and how fast it fades.
 const RANGE = {
   shot: { ref: 8, rolloff: 0.8 },
@@ -61,7 +64,10 @@ const RANGE = {
   shotPistol: { ref: 6, rolloff: 0.9 },
   reload: { ref: 1.5, rolloff: 1.5 },
   step: { ref: 1.5, rolloff: 1.6 },
+  stepMetal: { ref: 2, rolloff: 1.4 }, // (a little further: someone on the catwalk above)
+  swing: { ref: 2, rolloff: 1.4 },
   land: { ref: 2, rolloff: 1.4 },
+  hiss: { ref: 4, rolloff: 1 },
 };
 // Reload sounds, seconds after the reload starts (timed to the clip: the
 // magazine comes out at 4%, goes in at 56% of 2.2 s, then the bolt).
@@ -117,7 +123,7 @@ export function setListener(pos, dir) {
   }
 }
 
-// name: 'shot' | 'reload' | 'step' | 'land'
+// name: 'shot' | 'reload' | 'step' | 'stepMetal' | 'land' | 'swing' (knife)
 export function playSound(name, position = null, intensity = 1, variant = 'rifle') {
   if (!ctx || muted) return;
   if (name === 'reload') {
@@ -139,6 +145,10 @@ export function playSound(name, position = null, intensity = 1, variant = 'rifle
     const shot = SHOTS[fast ? variant.slice(0, -5) : variant] ?? SHOTS.rifle;
     playBuffer('shot', shot.range, position, intensity * shot.volume, 0, { rate: shot.rate });
     (shot.after ?? []).forEach((at, i) => playBuffer(i ? 'boltForward' : 'boltBack', 'reload', position, 1, at * (fast ? 0.5 : 1)));
+    return;
+  }
+  if (name === 'bounce') { // a smoke bomb hitting something: a light metal clack
+    playBuffer('boltBack', 'reload', position, 0.5, 0, { rate: 1.4 });
     return;
   }
   if (name === 'pickup') { // picking up a weapon: a quick mechanical clack-clack
@@ -286,7 +296,13 @@ function synthesiseAll() {
     boltBack: variants(2, () => make(0.14, boltBack, 0.8)),
     boltForward: variants(2, () => make(0.18, boltForward, 0.9)),
     step: variants(4, () => make(0.16, footstep, 0.8)),
+    stepMetal: variants(4, () => make(0.16, footstep, 0.8)),
     land: variants(2, () => make(0.3, landing, 0.9)),
+    swing: variants(3, () => make(0.32, swish, 0.8)),
+    hiss: [make(1.6, hiss, 0.8)],
+    hitBody: [make(0.12, hitBody, 0.85)], // (no noise in them: one each, varied by PITCH_SPREAD)
+    hitHead: [make(0.22, hitHead, 0.85)],
+    hitKill: [make(0.6, hitKill, 0.9)],
   };
 }
 
@@ -383,6 +399,58 @@ function footstep(d, sr) {
     d[i] = Math.sin(2 * Math.PI * f * t) * 0.8 * env(t, 0, 0.002, 0.028)
       + grit[i] * 2.2 * env(t, 0.001, 0.003, decay)
       + grit[i] * 0.8 * env(t, 0.03, 0.004, 0.025); // heel then toe
+  }
+}
+
+// A knife cutting the air: airy noise swelling and fading with the swing
+// (loudest ~0.16 s in, when the hand is fastest), a little higher at the peak.
+function swish(d, sr) {
+  const low = bandpass(noise(d.length), 500, 2400, sr);
+  const high = bandpass(noise(d.length), 1800, 6000, sr);
+  for (let i = 0; i < d.length; i++) {
+    const t = i / sr;
+    const u = Math.max(0, Math.min(1, (t - 0.04) / 0.26));
+    const swell = Math.sin(Math.PI * u) ** 3;
+    d[i] = (low[i] * 1.6 + high[i] * 1.1 * swell) * swell;
+  }
+}
+
+// Hit confirmations (our own shots only, not positioned). No noise (that
+// sounded like the gunshot): a tuned knock, a short "tok" of two tones with
+// a tiny click on its attack, over a low thud dropping in pitch. A headshot:
+// a higher tok and a sharp metallic tink; a kill: a heavier thud, a deep
+// boom and a brief ring.
+function knock(d, sr, level, tok, tokDecay, thudFrom, thudTo, thudDecay) {
+  for (let i = 0; i < d.length; i++) {
+    const t = i / sr;
+    const f = thudTo + (thudFrom - thudTo) * Math.exp(-t / 0.012);
+    d[i] += (Math.sin(2 * Math.PI * f * t) * env(t, 0, 0.002, thudDecay)
+      + ping(t, 0, tok, tokDecay) * 0.9
+      + Math.sin(2 * Math.PI * 4200 * t) * env(t, 0, 0.0005, 0.003) * 0.35) * level;
+  }
+}
+function hitBody(d, sr) {
+  knock(d, sr, 1, [1050, 1580], 0.024, 300, 110, 0.04);
+}
+function hitHead(d, sr) {
+  knock(d, sr, 0.85, [1350, 2030], 0.024, 340, 130, 0.04);
+  for (let i = 0; i < d.length; i++) d[i] += ping(i / sr, 0.006, [3200, 4480, 5760], 0.05) * 0.8;
+}
+function hitKill(d, sr) {
+  knock(d, sr, 1, [900, 1350], 0.02, 260, 70, 0.07);
+  for (let i = 0; i < d.length; i++) {
+    const t = i / sr;
+    d[i] += Math.sin(2 * Math.PI * (45 + 40 * Math.exp(-t / 0.05)) * t) * env(t, 0.005, 0.004, 0.16) * 0.9 // the boom
+      + ping(t, 0.02, [1480, 2220, 2960], 0.12) * 0.45; // the ring
+  }
+}
+
+// A smoke bomb going off: a burst of hissing gas, then a long fading hiss.
+function hiss(d, sr) {
+  const air = bandpass(noise(d.length), 1500, 7000, sr);
+  for (let i = 0; i < d.length; i++) {
+    const t = i / sr;
+    d[i] = air[i] * (Math.min(1, t / 0.03) * (0.45 + 0.55 * Math.exp(-t / 0.15)) * Math.exp(-t / 0.9));
   }
 }
 

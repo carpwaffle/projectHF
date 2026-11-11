@@ -7,13 +7,22 @@
 
 import * as THREE from 'three';
 import { MeshBVH } from 'three-mesh-bvh';
-import { GRAVITY, JUMP_SPEED, MOVE_SPEED, PLAYER_HEIGHT, PLAYER_RADIUS, FLY_SPEED, FLY_MAX_Y, CROUCH_HEIGHT, CROUCH_SPEED } from './shared.js';
+import { GRAVITY, JUMP_SPEED, MOVE_SPEED, PLAYER_HEIGHT, PLAYER_RADIUS, FLY_SPEED, FLY_MAX_Y, CROUCH_HEIGHT, CROUCH_SPEED, CLIMB_SPEED, SMOKE } from './shared.js';
 
 const SUBSTEP = 1 / 120; // small steps so fast movement can't tunnel through thin walls
 const WALKABLE = 0.6; // surfaces whose normal.y is above this can be stood on (~53°)
 const STICK_SPEED = 4; // downward speed while grounded, keeps players on ramps/stairs
 const STEP_HEIGHT = 0.25; // ledges up to this high are walked onto (kerbs: 0.15), no jump needed
 const NOCLIP_STEP = 0.5; // no-clip: how high a floor can be and still be stepped onto (stairs)
+const NOCLIP_EDGE = 0.8; // m no-clip keeps inside the play area's edge (the boundary walls': the camera saw inside them)
+const NOCLIP_FLOOR_SEARCH = 8; // m below the feet a floor must be, underground (else: solid earth behind the canal's / subway's walls)
+// Ladders: the climbing area in front of one (m from its plane, beyond its
+// sides, below its foot / above its top).
+const LADDER_REACH = 0.85;
+const LADDER_SIDE = 0.25;
+const LADDER_ENDS = 0.3;
+const LADDER_LET_GO = 0.4; // s after jumping off a ladder before it can be grabbed again
+const LADDER_STANDOFF = PLAYER_RADIUS + 0.1; // (m) from the ladder's plane while not pushing against it
 
 const seg = new THREE.Line3();
 const box = new THREE.Box3();
@@ -25,7 +34,8 @@ const ray = new THREE.Ray();
 
 export class World {
   // collision: an Object3D whose meshes are the collision geometry.
-  // meta: { spawns: [[x,y,z,yaw?]...], teamSpawns: [[...], [...]], playRadius }
+  // meta: { spawns: [[x,y,z,yaw?]...], teamSpawns: [[...], [...]],
+  //         playBounds: [x0, z0, x1, z1], ladders, zones (see tools/export_map.py) }
   constructor(collision, meta) {
     collision.updateMatrixWorld(true);
     const chunks = [];
@@ -50,10 +60,64 @@ export class World {
     this.bulletBvh = buildBVH(bulletChunks); // shooting
     this.spawns = meta.spawns;
     this.teamSpawns = meta.teamSpawns ?? [meta.spawns, meta.spawns];
-    this.playRadius = meta.playRadius;
+    this.playBounds = meta.playBounds;
+    // How far the play area reaches from the centre along x or z (the
+    // minimap, the bots' navigation grid).
+    this.extent = Math.max(...this.playBounds.map(Math.abs));
+    this.ladders = meta.ladders; // [{ p: [x, z] on its plane, n: [x, z] towards the climber, w: half width, y0, y1 }]
+    this.zones = meta.zones;
+    this.metal = meta.metal; // [{ rect: [x0, z0, x1, z1], y: [lo, hi] }]: metal floors
   }
 
-  // player: { pos:[x,y,z], vel:[x,y,z], onGround, crouched }
+  // Standing on a metal floor (footstep sound)?
+  onMetal(pos) {
+    return this.metal.some(({ rect: [x0, z0, x1, z1], y: [lo, hi] }) =>
+      pos[0] >= x0 && pos[0] <= x1 && pos[2] >= z0 && pos[2] <= z1 && pos[1] >= lo && pos[1] <= hi);
+  }
+
+  // (x, z) moved inside the play area.
+  clampXZ(x, z, margin = 0) {
+    const [x0, z0, x1, z1] = this.playBounds;
+    return [Math.min(x1 - margin, Math.max(x0 + margin, x)), Math.min(z1 - margin, Math.max(z0 + margin, z))];
+  }
+
+  inside(x, z, margin = 0) {
+    const [x0, z0, x1, z1] = this.playBounds;
+    return x >= x0 + margin && x <= x1 - margin && z >= z0 + margin && z <= z1 - margin;
+  }
+
+  // The ladder whose climbing area the feet at pos are in, or null.
+  ladderAt(pos) {
+    for (const l of this.ladders) {
+      const dx = pos[0] - l.p[0];
+      const dz = pos[2] - l.p[1];
+      const front = dx * l.n[0] + dz * l.n[1];
+      const side = -dx * l.n[1] + dz * l.n[0];
+      if (front >= -0.05 && front <= LADDER_REACH && Math.abs(side) <= l.w + LADDER_SIDE
+        && pos[1] >= l.y0 - LADDER_ENDS && pos[1] <= l.y1 + LADDER_ENDS) return l;
+    }
+    return null;
+  }
+
+  // The callout zone at pos (main.js shows its name), or null: ones limited
+  // to a height range first, then the smallest.
+  zoneAt(pos) {
+    let best = null;
+    let bestScore = Infinity;
+    for (const z of this.zones) {
+      const [x0, z0, x1, z1] = z.rect;
+      if (pos[0] < x0 || pos[0] > x1 || pos[2] < z0 || pos[2] > z1) continue;
+      if (z.y && (pos[1] < z.y[0] || pos[1] > z.y[1])) continue;
+      const score = (x1 - x0) * (z1 - z0) - (z.y ? 1e6 : 0);
+      if (score < bestScore) {
+        best = z;
+        bestScore = score;
+      }
+    }
+    return best;
+  }
+
+  // player: { pos:[x,y,z], vel:[x,y,z], onGround, crouched, climbing (set here) }
   // input:  { forward:-1..1, right:-1..1, jump:bool, yaw,
   //           speed (multiplier, default 1), jumpHeight (multiplier, default 1), fly (-1..1: fly hack up / down; undefined: no fly),
   //           noclip (bool: through walls and ceilings, still standing on floors),
@@ -73,7 +137,47 @@ export class World {
     const speed = MOVE_SPEED * (input.speed ?? 1) * (player.crouched ? CROUCH_SPEED : 1);
     player.vel[0] = mx * speed;
     player.vel[2] = mz * speed;
-    if (input.fly !== undefined) {
+    // Ladders: in front of one, moving towards it climbs up, away from it
+    // climbs down (on the ground: walks away), sideways shuffles along it.
+    // No gravity meanwhile; jumping lets go. At the top, moving towards it
+    // steps onto the floor behind.
+    player.ladderOff = Math.max(0, (player.ladderOff ?? 0) - dt);
+    const ladder = input.fly === undefined && !player.ladderOff ? this.ladderAt(player.pos) : null;
+    const towards = ladder ? -(mx * ladder.n[0] + mz * ladder.n[1]) : 0;
+    // (At its foot counts as standing: climbing down ends there.)
+    const standing = player.onGround || (ladder && player.pos[1] <= ladder.y0 + 0.02);
+    player.climbing = !!ladder && (!standing || towards > 0.3);
+    if (player.climbing && input.jump) {
+      player.climbing = false;
+      player.ladderOff = LADDER_LET_GO;
+      player.vel[0] = ladder.n[0] * 3;
+      player.vel[2] = ladder.n[1] * 3;
+      player.vel[1] = 2;
+      player.onGround = false;
+    } else if (player.climbing) {
+      const k = input.speed ?? 1;
+      const side = -mx * ladder.n[1] + mz * ladder.n[0];
+      const atTop = player.pos[1] > ladder.y1 - 0.4;
+      // Towards the ladder: pressed against it (at the top: onto the floor
+      // behind). Otherwise held a little off it, clear of the edge at its top
+      // (coming down from there, that edge would be stepped back up onto).
+      const front = (player.pos[0] - ladder.p[0]) * ladder.n[0] + (player.pos[2] - ladder.p[1]) * ladder.n[1];
+      const inward = towards > 0
+        ? (atTop ? MOVE_SPEED * k : 1) * Math.min(1, towards)
+        : Math.max(-2, Math.min(2, (front - LADDER_STANDOFF) * 8));
+      // Sideways: shuffles, but no further than the ladder's sides.
+      const along = -(player.pos[0] - ladder.p[0]) * ladder.n[1] + (player.pos[2] - ladder.p[1]) * ladder.n[0];
+      const room = ladder.w - 0.1;
+      let shuffle = side * 1.5;
+      if (Math.abs(along) > room) shuffle = Math.sign(along) * Math.min(0, shuffle * Math.sign(along)) - (along - Math.sign(along) * room) * 8;
+      player.vel[0] = -ladder.n[1] * shuffle - ladder.n[0] * inward;
+      player.vel[2] = ladder.n[0] * shuffle - ladder.n[1] * inward;
+      player.vel[1] = towards * CLIMB_SPEED * k;
+      player.onGround = false;
+    }
+    if (player.climbing) {
+      // (vertical speed set above)
+    } else if (input.fly !== undefined) {
       player.vel[1] = input.fly * FLY_SPEED; // hovers when neither key is held
     } else if (input.jump && player.onGround) {
       player.vel[1] = JUMP_SPEED * Math.sqrt(input.jumpHeight ?? 1); // (height grows with speed²)
@@ -81,13 +185,17 @@ export class World {
     }
     const steps = Math.max(1, Math.ceil(dt / SUBSTEP));
     for (let i = 0; i < steps; i++) {
-      if (input.noclip) this.substepNoclip(player, dt / steps, input.fly !== undefined);
-      else this.substep(player, dt / steps, input.fly !== undefined);
+      const floating = input.fly !== undefined || player.climbing; // (no gravity)
+      if (input.noclip) this.substepNoclip(player, dt / steps, floating);
+      else this.substep(player, dt / steps, floating);
     }
   }
 
   // No-clip: no collision with walls or ceilings, but floors (any surface
-  // below, up to a step high) are stood on, and the arena boundary holds.
+  // below, up to a step high) are stood on, and the arena boundary holds
+  // (NOCLIP_EDGE inside it). Below ground level (the canal, the subway),
+  // walls hold where there'd be no floor beyond them (solid earth: we'd fall
+  // out of the map): slides along them instead.
   // flying (with the fly hack too): no gravity, up to the fly ceiling.
   substepNoclip(player, h, flying = false) {
     const { pos, vel } = player;
@@ -95,8 +203,16 @@ export class World {
       // (vertical speed set by stepPlayer)
     } else if (player.onGround && vel[1] <= 0) vel[1] = 0;
     else vel[1] -= GRAVITY * h;
-    const x = pos[0] + vel[0] * h;
-    const z = pos[2] + vel[2] * h;
+    let x = pos[0] + vel[0] * h;
+    let z = pos[2] + vel[2] * h;
+    if (pos[1] < -0.05) {
+      const floorAt = (fx, fz) => this.floorBelow([fx, pos[1] + NOCLIP_STEP, fz], NOCLIP_FLOOR_SEARCH);
+      if (!floorAt(x, z)) {
+        if (floorAt(x, pos[2])) z = pos[2];
+        else if (floorAt(pos[0], z)) x = pos[0];
+        else { x = pos[0]; z = pos[2]; }
+      }
+    }
     let y = pos[1] + vel[1] * h;
     // The highest floor between a step above our feet and where we'd end up
     // (a little lower while grounded, to follow stairs and ramps down).
@@ -113,7 +229,7 @@ export class World {
     pos[0] = x;
     pos[1] = flying ? Math.min(FLY_MAX_Y, y) : y;
     pos[2] = z;
-    this.keepInside(player);
+    this.keepInside(player, NOCLIP_EDGE);
   }
 
   substep(player, h, flying = false) {
@@ -219,17 +335,61 @@ export class World {
   }
 
   // Safety net: stay inside the arena, never fall through the world.
-  keepInside(player) {
+  keepInside(player, margin = 0) {
     const { pos, vel } = player;
-    const d = Math.hypot(pos[0], pos[2]);
-    if (d > this.playRadius) {
-      pos[0] *= this.playRadius / d;
-      pos[2] *= this.playRadius / d;
-    }
-    if (pos[1] < -5) {
+    [pos[0], pos[2]] = this.clampXZ(pos[0], pos[2], margin);
+    if (pos[1] < -8) {
       pos[1] = 1;
       vel[1] = 0;
     }
+  }
+
+  // Is there a floor (a surface facing up: not the underside of a wall we're
+  // inside) within maxDist below origin?
+  floorBelow(origin, maxDist) {
+    ray.origin.set(...origin);
+    ray.direction.set(0, -1, 0);
+    const hit = this.bulletBvh.raycastFirst(ray, THREE.DoubleSide, 0, maxDist);
+    return !!hit && hit.face.normal.y > 0.5;
+  }
+
+  // A thrown smoke bomb (g: { pos, vel, rest }) moved on by dt: falls,
+  // bounces off the map (losing speed: SMOKE.bounce across the surface,
+  // SMOKE.friction along it) and comes to rest on a floor. Returns whether
+  // it hit something hard (a bounce sound). The host and every client run
+  // this alike (the host's end position is the one that counts).
+  stepGrenade(g, dt) {
+    if (g.rest) return false;
+    let bounced = false;
+    const steps = Math.max(1, Math.ceil(dt / SUBSTEP));
+    const h = dt / steps;
+    for (let i = 0; i < steps && !g.rest; i++) {
+      g.vel[1] -= GRAVITY * h;
+      const speed = Math.hypot(...g.vel);
+      const move = speed * h;
+      if (move < 1e-6) continue;
+      ray.origin.set(...g.pos);
+      ray.direction.set(g.vel[0] / speed, g.vel[1] / speed, g.vel[2] / speed);
+      const hit = this.bulletBvh.raycastFirst(ray, THREE.DoubleSide, 0, move + SMOKE.size);
+      if (!hit) {
+        for (let k = 0; k < 3; k++) g.pos[k] += g.vel[k] * h;
+        continue;
+      }
+      const n = hit.face.normal.clone();
+      if (n.dot(ray.direction) > 0) n.negate(); // (facing us)
+      const back = Math.max(0, hit.distance - SMOKE.size);
+      for (let k = 0; k < 3; k++) g.pos[k] += ray.direction.getComponent(k) * back;
+      const vn = g.vel[0] * n.x + g.vel[1] * n.y + g.vel[2] * n.z;
+      const across = [n.x * vn, n.y * vn, n.z * vn];
+      for (let k = 0; k < 3; k++) g.vel[k] = (g.vel[k] - across[k]) * SMOKE.friction - across[k] * SMOKE.bounce;
+      if (Math.abs(vn) > 1.5) bounced = true;
+      if (n.y > 0.7 && Math.hypot(...g.vel) < 0.6) {
+        g.rest = true;
+        g.vel = [0, 0, 0];
+      }
+    }
+    [g.pos[0], g.pos[2]] = this.clampXZ(g.pos[0], g.pos[2]);
+    return bounced;
   }
 
   // Distance to the first map surface along a (normalised) ray, capped at maxDist.

@@ -3,7 +3,8 @@
 
 import * as THREE from 'three';
 import { Character, makeRifle, makeGun, MUZZLE } from './character.js';
-import { Tracers } from './effects.js';
+import { Tracers, Smokes } from './effects.js';
+import { assets } from './assets.js';
 import { WEAPONS, ALL_SPOTS, PICKUP_RADIUS, TEAMS, headAABB, bodyAABBs } from './shared.js';
 
 // Horizon: the haze colour (fog and the bottom of the sky), the sky
@@ -15,6 +16,7 @@ const FOG_FAR = 185; // (camera far plane: 200)
 const OUTER_GROUND = 0x45484d;
 const SKYLINE = 0x7d8796; // the nearest towers' colour (bluish grey)
 const _up = new THREE.Vector3(0, 1, 0);
+const TRAJECTORY_POINTS = 120; // (the smoke bomb's path: one per 1/60 s of its flight, up to the fuse)
 
 
 export class Renderer {
@@ -56,10 +58,28 @@ export class Renderer {
 
 
     this.avatars = new Map(); // id -> Character
+    this.ghosts = new Map(); // id -> Character: fake-lag afterimages (see updateGhost)
     this.onSound = null; // (name, position | null, intensity, variant) => void, set by main.js
     this.tracers = new Tracers(this.scene);
-    this.buildPickupSpots();
-    this.buildHorizon();
+    // The smoke bomb's path while it's held (see setTrajectory): a red ribbon
+    // (two vertices per point, turned to face the camera), a ring where it pops.
+    const strip = new THREE.BufferGeometry().setAttribute('position', new THREE.BufferAttribute(new Float32Array(TRAJECTORY_POINTS * 6), 3));
+    strip.setIndex(Array.from({ length: TRAJECTORY_POINTS - 1 }, (_, i) => [2 * i, 2 * i + 2, 2 * i + 1, 2 * i + 1, 2 * i + 2, 2 * i + 3]).flat());
+    // (Drawn over everything: after a bounce it runs along the floor, which hid it.
+    // The path itself already stops at walls.)
+    this.trajectory = new THREE.Mesh(strip, new THREE.MeshBasicMaterial({
+      color: 0xff3030, transparent: true, opacity: 0.85, side: THREE.DoubleSide, depthWrite: false, depthTest: false,
+    }));
+    this.trajectory.renderOrder = 20;
+    this.trajectory.frustumCulled = false;
+    this.trajectory.visible = false;
+    this.trajectoryEnd = new THREE.Mesh(
+      new THREE.RingGeometry(0.35, 0.5, 32).rotateX(-Math.PI / 2),
+      new THREE.MeshBasicMaterial({ color: 0xff3030, transparent: true, opacity: 0.8, side: THREE.DoubleSide, depthWrite: false, depthTest: false }),
+    );
+    this.trajectoryEnd.renderOrder = 20;
+    this.trajectoryEnd.visible = false;
+    this.scene.add(this.trajectory, this.trajectoryEnd);
 
     // Wall hack: every other player drawn again on top of the world as a
     // see-through silhouette in their team's colour (layers 1 = teammates,
@@ -84,8 +104,14 @@ export class Renderer {
     resize();
   }
 
+  // props: cars, trees, furniture (lit in real time, like the characters).
   // lightmap: the baked lighting (or null); intensity: its LM_MAX scale.
-  setMap(visual, lightmap = null, intensity = 1) {
+  // world: its pickup spots (shared.js ALL_SPOTS, set from the map's meta
+  // first) and play area (the horizon starts where the map ends).
+  setMap(visual, props, lightmap, intensity, world) {
+    this.smokes = new Smokes(this.scene, world, (pos) => this.onSound?.('bounce', pos, 1));
+    this.buildPickupSpots();
+    this.buildHorizon(world.playBounds);
     if (lightmap) {
       // Baked lighting replaces dynamic lighting on the map: unlit materials
       // (cheaper than lit ones) showing texture x lightmap. MeshBasicMaterial
@@ -108,6 +134,7 @@ export class Renderer {
       });
     }
     this.scene.add(visual);
+    this.scene.add(props);
   }
 
   buildGun() {
@@ -147,9 +174,10 @@ export class Renderer {
     const teammate = avatar.team === this.localTeam;
     avatar.label.material.depthTest = !teammate;
     avatar.label.material.needsUpdate = true;
-    // Draw teammates' labels last: other see-through things (e.g. the map's
-    // window glass, sorted as one object at the map centre) would cover them.
-    avatar.label.renderOrder = teammate ? 999 : 0;
+    // Draw teammates' labels after other see-through things (e.g. the map's
+    // window glass, sorted as one object at the map centre, would cover
+    // them), but before smoke (5), which covers them like it does enemies'.
+    avatar.label.renderOrder = teammate ? 4 : 0;
   }
 
   // state: { pos, yaw, pitch, dead }
@@ -161,6 +189,7 @@ export class Renderer {
   }
 
   removeAvatar(id) {
+    this.removeGhost(id);
     const avatar = this.avatars.get(id);
     if (!avatar) return;
     for (const box of avatar.hitboxes ?? []) this.xrayScene.remove(box);
@@ -171,6 +200,68 @@ export class Renderer {
 
   clearAvatars() {
     for (const id of [...this.avatars.keys()]) this.removeAvatar(id);
+    for (const id of [...this.ghosts.keys()]) this.removeGhost(id);
+    this.smokes?.clear(); // (and the smoke bombs and clouds)
+  }
+
+  // Where the smoke bomb in our hand is (first person), or null.
+  smokeInHand() {
+    if (!this.view?.object.visible || this.view.weaponId !== 'smoke') return null;
+    return this.view.gun.getWorldPosition(new THREE.Vector3()).toArray();
+  }
+
+  // The smoke bomb's predicted path (points: [[x,y,z], ...], the last where
+  // it pops), or null to hide it.
+  setTrajectory(points) {
+    this.trajectory.visible = this.trajectoryEnd.visible = !!points;
+    if (!points) return;
+    const pos = this.trajectory.geometry.attributes.position;
+    const n = Math.min(points.length, TRAJECTORY_POINTS);
+    const a = new THREE.Vector3();
+    const b = new THREE.Vector3();
+    const side = new THREE.Vector3();
+    const toCam = new THREE.Vector3();
+    for (let i = 0; i < n; i++) {
+      a.set(...points[Math.max(0, i - 1)]);
+      b.set(...points[Math.min(n - 1, i + 1)]);
+      const p = new THREE.Vector3(...points[i]);
+      toCam.subVectors(this.camera.position, p);
+      const width = 0.004 + 0.0025 * toCam.length(); // (wider far off, so it stays visible; thin by the hand)
+      side.crossVectors(b.sub(a), toCam).normalize().multiplyScalar(width);
+      pos.setXYZ(2 * i, p.x - side.x, p.y - side.y, p.z - side.z);
+      pos.setXYZ(2 * i + 1, p.x + side.x, p.y + side.y, p.z + side.z);
+    }
+    pos.needsUpdate = true;
+    this.trajectory.geometry.setDrawRange(0, Math.max(0, n - 1) * 6);
+    this.trajectoryEnd.position.set(...points[n - 1]);
+    this.trajectoryEnd.position.y += 0.03;
+  }
+
+  // A fake-lag player's afterimage (state as for updateAvatar; null: none):
+  // a second character, solid, standing where they were. Named for the
+  // enemy (the player themself is hidden from them), not for their team.
+  updateGhost(id, name, skin, team, state, dt) {
+    if (!state) return this.removeGhost(id);
+    let ghost = this.ghosts.get(id);
+    if (!ghost) {
+      ghost = new Character(name, skin, team);
+      ghost.isGhost = true;
+      this.applyLabelRule(ghost);
+      this.scene.add(ghost.object);
+      this.ghosts.set(id, ghost);
+    }
+    ghost.update(dt, state);
+    ghost.label.visible = team !== this.localTeam;
+    ghost.pose = { yaw: state.yaw, pitch: state.pitch, weapon: state.weapon, vel: state.vel, skin, crouch: ghost.crouch };
+  }
+
+  removeGhost(id) {
+    const ghost = this.ghosts.get(id);
+    if (!ghost) return;
+    for (const box of ghost.hitboxes ?? []) this.xrayScene.remove(box);
+    this.scene.remove(ghost.object);
+    ghost.dispose();
+    this.ghosts.delete(id);
   }
 
   // ---- first-person body -------------------------------------------------
@@ -207,14 +298,16 @@ export class Renderer {
     view.shadow.visible = false;
     view.label.visible = false;
     view.placeEyes(state.eye, state.yaw, state.pitch);
+    view.holdSmokeInView(state.eye, state.yaw, state.pitch);
   }
 
   // ---- horizon -----------------------------------------------------------
-  // Beyond the ring of facades: the ground carries on, a skyline of plain
-  // towers stands behind them, and both fade into a haze that matches the
-  // bottom of a gradient sky, so the map has no visible edge.
+  // Beyond the map's boundary blocks: the ground carries on, a skyline of
+  // plain towers stands behind them, and both fade into a haze that matches
+  // the bottom of a gradient sky, so the map has no visible edge.
 
-  buildHorizon() {
+  // bounds: the play area [x0, z0, x1, z1].
+  buildHorizon(bounds) {
     // Sky: a dome around the camera, drawn first, behind everything (hazy
     // HORIZON at and below the horizon, ZENITH overhead). Tone-mapped like
     // the fogged scene so the two meet without a seam.
@@ -252,20 +345,28 @@ export class Renderer {
     };
     this.scene.add(sky);
 
-    // Ground: asphalt from under the facades out past where the fog is total.
+    // Ground: asphalt from under the boundary blocks (4 m outside the play
+    // area, leaving the map's own ground, canal and subway alone) out past
+    // where the fog is total.
+    const [x0, z0, x1, z1] = [bounds[0] - 4, bounds[1] - 4, bounds[2] + 4, bounds[3] + 4];
+    const groundShape = new THREE.Shape([[-320, -320], [320, -320], [320, 320], [-320, 320]].map(([x, y]) => new THREE.Vector2(x, y)));
+    // (shape y = -z after the rotation below)
+    groundShape.holes.push(new THREE.Path([[x0, -z1], [x0, -z0], [x1, -z0], [x1, -z1]].map(([x, y]) => new THREE.Vector2(x, y))));
     const ground = new THREE.Mesh(
-      new THREE.RingGeometry(52, 320, 96, 1).rotateX(-Math.PI / 2),
+      new THREE.ShapeGeometry(groundShape).rotateX(-Math.PI / 2),
       new THREE.MeshBasicMaterial({ color: OUTER_GROUND }),
     );
     ground.position.y = -0.03; // (just under the map's own ground)
     this.scene.add(ground);
 
     // Skyline: three rings of plain towers, taller further out, point-
-    // symmetric like the map. Seeded, so it's the same for everyone.
+    // symmetric. Seeded, so it's the same for everyone.
     let seed = 7;
     const rand = () => ((seed = (seed * 16807) % 2147483647) - 1) / 2147483646;
     const towers = [];
-    for (const [radius, count, minH, maxH] of [[80, 36, 9, 20], [115, 32, 14, 32], [155, 26, 20, 46]]) {
+    // (Pushed out to clear the map's corners.)
+    const out = Math.hypot(Math.max(-bounds[0], bounds[2]), Math.max(-bounds[1], bounds[3])) + 20 - 80;
+    for (const [radius, count, minH, maxH] of [[80 + out, 36, 9, 20], [115 + out, 32, 14, 32], [155 + out * 0.5, 26, 20, 46]]) {
       for (let k = 0; k < count / 2; k++) {
         const a = ((k + 0.25 + rand() * 0.5) / count) * Math.PI * 2;
         const r = radius + (rand() - 0.5) * 12;
@@ -274,6 +375,25 @@ export class Renderer {
         const h = minH + rand() * (maxH - minH);
         const shade = rand();
         for (const sign of [1, -1]) towers.push({ x: Math.cos(a) * r * sign, z: Math.sin(a) * r * sign, w, d, h, a, r, shade });
+      }
+    }
+    // A row of blocks just outside each side of the (rectangular) boundary:
+    // the rings leave its long sides open.
+    const bx = Math.max(-bounds[0], bounds[2]) + 4; // (the boundary blocks' outer faces)
+    const bz = Math.max(-bounds[1], bounds[3]) + 4;
+    for (const [half, across, alongX] of [[bz + 6, bx, false], [bx + 6, bz, true]]) {
+      for (let s = -half; s <= half; s += 13) {
+        const off = across + 9 + rand() * 8;
+        const along = s + (rand() - 0.5) * 4;
+        const w = 9 + rand() * 6;
+        const d = 9 + rand() * 6;
+        const h = 13 + rand() * 11;
+        const shade = rand();
+        for (const sign of [1, -1]) {
+          const x = (alongX ? along : off) * sign;
+          const z = (alongX ? off : along) * sign;
+          towers.push({ x, z, w, d, h, a: 0, r: Math.hypot(x, z), shade });
+        }
       }
     }
     // Unlit, flat silhouettes, already partly hazed (closer to the horizon
@@ -300,8 +420,9 @@ export class Renderer {
   // ---- wall hack ---------------------------------------------------------
 
   renderWallHack() {
-    const layerOf = (avatar) => (avatar.dead ? 0 : 1 + avatar.team);
-    for (const avatar of this.avatars.values()) {
+    // (A fake-lag enemy: their afterimage, not them; our own team's afterimages: no.)
+    const layerOf = (avatar) => (avatar.dead || avatar.fakeHidden || (avatar.isGhost && avatar.team === this.localTeam) ? 0 : 1 + avatar.team);
+    for (const avatar of [...this.avatars.values(), ...this.ghosts.values()]) {
       if (!avatar.xrayMeshes) {
         avatar.xrayMeshes = [];
         avatar.model.traverse((o) => { if (o.isSkinnedMesh) avatar.xrayMeshes.push(o); });
@@ -376,27 +497,13 @@ export class Renderer {
       timer.position.set(x, y + 1.0, z);
       timer.visible = false;
       this.scene.add(timer);
-      return { holder, kind, weapon: -1, gun: null, timer, canvas, texture, readyAt: 0, shown: -1 };
+      return { circle, holder, kind, weapon: -1, gun: null, timer, canvas, texture, readyAt: 0, shown: -1 };
     });
   }
 
-  // A first-aid box: white, a red cross on every side.
+  // A first-aid case (white, a red cross), standing on its base.
   makeHealPack() {
-    if (!this.healPackGeometry) {
-      const canvas = document.createElement('canvas');
-      canvas.width = canvas.height = 64;
-      const g = canvas.getContext('2d');
-      g.fillStyle = '#f4f4f4';
-      g.fillRect(0, 0, 64, 64);
-      g.fillStyle = '#e02424';
-      g.fillRect(24, 10, 16, 44);
-      g.fillRect(10, 24, 44, 16);
-      const map = new THREE.CanvasTexture(canvas);
-      map.colorSpace = THREE.SRGBColorSpace;
-      this.healPackGeometry = new THREE.BoxGeometry(0.42, 0.42, 0.42);
-      this.healPackMaterial = new THREE.MeshLambertMaterial({ map });
-    }
-    return new THREE.Mesh(this.healPackGeometry, this.healPackMaterial);
+    return assets.medkit.clone();
   }
 
   // A gold coin with a "$" on both faces, standing on its edge.
@@ -450,7 +557,8 @@ export class Renderer {
     const now = performance.now() / 1000;
     this.pickups.forEach((spot, i) => {
       const w = weapons ? weapons[i] ?? -1 : -1;
-      spot.timer.visible = !!weapons && w < 0;
+      spot.circle.visible = w !== -2; // (-2: off in this mode)
+      spot.timer.visible = !!weapons && w === -1;
       if (spot.timer.visible) spot.readyAt = now + (remaining[i] ?? 0);
       if (w === spot.weapon) return;
       spot.weapon = w;
@@ -469,7 +577,7 @@ export class Renderer {
       if (reload?.hideOutside) {
         for (const name of [reload.part, ...(reload.partAlso ?? [])]) spot.gun.userData.bones[name]?.scale.setScalar(1e-4);
       }
-      spot.gun.scale.setScalar(id === 'pistol' || id === 'revolver' ? 2.2 : 1.4); // easy to see from afar
+      spot.gun.scale.setScalar(id === 'pistol' || id === 'revolver' || id === 'knife' ? 2.2 : 1.4); // easy to see from afar
       spot.holder.add(spot.gun);
     });
   }
@@ -489,6 +597,17 @@ export class Renderer {
   // from, to: [x,y,z]; hit: the shot hit something (impact spark)
   addTracer(from, to, hit = true) {
     this.tracers.add(from, to, hit);
+  }
+
+  // A player hit (not us: we see the damage flash): sparks on their head
+  // or chest, thrown toward the shooter's side. from: the shot's origin.
+  hitSparks(id, from, head) {
+    const avatar = this.avatars.get(id);
+    if (!avatar || avatar.dead || !avatar.object.visible) return;
+    const at = head ? avatar.bones.head.getWorldPosition(new THREE.Vector3()).add(_up.clone().multiplyScalar(0.08))
+      : avatar.bones.torso.getWorldPosition(new THREE.Vector3());
+    const dir = from ? new THREE.Vector3(...from).sub(at).normalize() : new THREE.Vector3(0, 0, 1);
+    this.tracers.addHitSparks(at.addScaledVector(dir, head ? 0.1 : 0.15), dir, head);
   }
 
   // Our own rifle's muzzle, as drawn this frame (call after updateViewmodel).
@@ -558,6 +677,7 @@ export class Renderer {
 
     this.camera.updateMatrixWorld();
     this.tracers.update(dt, this.camera);
+    this.smokes?.update(dt, this.camera);
     this.animatePickups(dt);
     // Teammates' names stay readable far away (and through walls): they grow
     // with distance beyond 12 m instead of shrinking.

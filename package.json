@@ -8,11 +8,11 @@
     "build:assets": "/Applications/Blender.app/Contents/MacOS/Blender -b --factory-startup -noaudio --python tools/convert_assets.py && node tools/optimize_assets.mjs",
     "optimize:assets": "node tools/optimize_assets.mjs",
     "build:anims": "/Applications/Blender.app/Contents/MacOS/Blender -b --factory-startup -noaudio --python tools/convert_assets.py -- --anims && node tools/optimize_assets.mjs --anims",
-    "build:guns": "/Applications/Blender.app/Contents/MacOS/Blender -b --factory-startup -noaudio --python tools/convert_assets.py -- --guns && node tools/optimize_assets.mjs --guns",
-    "build:map": "/Applications/Blender.app/Contents/MacOS/Blender -b maps/downtown.blend -noaudio --python tools/export_map.py && node tools/optimize_assets.mjs --map-only",
+    "gen:map": "/Applications/Blender.app/Contents/MacOS/Blender -b --factory-startup -noaudio --python tools/district_generator.py -- --force",
+    "build:map": "/Applications/Blender.app/Contents/MacOS/Blender -b maps/district.blend -noaudio --python tools/export_map.py && node tools/optimize_assets.mjs --map-only",
+    "build:map:fast": "/Applications/Blender.app/Contents/MacOS/Blender -b maps/district.blend -noaudio --python tools/export_map.py -- --no-bake && node tools/optimize_assets.mjs --map-only",
     "build:lightmap": "/Applications/Blender.app/Contents/MacOS/Blender -b --factory-startup -noaudio --python tools/export_map.py -- --retone && node tools/optimize_assets.mjs --lightmap-only",
-    "build:map:fast": "/Applications/Blender.app/Contents/MacOS/Blender -b maps/downtown.blend -noaudio --python tools/export_map.py -- --no-bake && node tools/optimize_assets.mjs --map-only",
-    "blueprint": "/Applications/Blender.app/Contents/MacOS/Blender -b maps/downtown.blend -noaudio --python tools/make_blueprint.py && node tools/make_blueprint.mjs"
+    "build:guns": "/Applications/Blender.app/Contents/MacOS/Blender -b --factory-startup -noaudio --python tools/convert_assets.py -- --guns && node tools/optimize_assets.mjs --guns"
   },
   "devDependencies": {
     "@gltf-transform/core": "^4.5.1",

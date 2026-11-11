@@ -19,7 +19,9 @@ export class NavGraph {
       };
       // (the movement collision: all of it, window blockers included)
       const positions = world.bvh.geometry.getAttribute('position').array.slice();
-      worker.postMessage({ positions, playRadius: world.playRadius }, [positions.buffer]);
+      worker.postMessage({
+        positions, extent: world.extent, playBounds: world.playBounds, ladders: world.ladders,
+      }, [positions.buffer]);
     });
   }
 

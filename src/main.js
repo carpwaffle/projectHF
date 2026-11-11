@@ -5,7 +5,9 @@
 import {
   STATE_SEND_RATE, INTERP_DELAY, eyeHeight, CROUCH_TIME, MAX_HP, MOVE_SPEED, HOST_TIMEOUT,
   MAX_RANGE, TEAMS, WEAPONS, DEFAULT_WEAPON, SWITCH_TIME, RESPAWN_TIME, SPAWN_PROTECTION,
-  ADMIN_NAME, PICKUP_SPOTS, HACKS, hasHack, HACK_LIMIT, hackCount, withinHackLimit, hackList, hacksPrice, SPEED_HACK, SPEED_HACK_JUMP, FLY_HACK_SPEED, RECOIL_HACK, fireCooldown, headAABB, lookDir, rayPlayer, spreadFor, spreadDir,
+  SMOKE, THROW_TIME, smokeRadius, smokeCentre, smokeBlocks,
+  MODES, weaponAllowed, weaponPrice, startWeapon, hacksOffMask,
+  ADMIN_NAME, useMapSpots, HACKS, hasHack, HACK_LIMIT, hackCount, withinHackLimit, hackList, hacksPrice, SPEED_HACK, SPEED_HACK_JUMP, FLY_HACK_SPEED, RECOIL_HACK, fireCooldown, headAABB, lookDir, rayPlayer, spreadFor, spreadDir,
 } from './shared.js';
 import { makeRoomCode, openHostPeer, joinRoom } from './net.js';
 import { HostServer, HOST_ID } from './host.js';
@@ -14,13 +16,18 @@ import { loadAssets, loadMap } from './assets.js';
 import { World } from './world.js';
 import { unlockAudio, playSound, setListener, toggleMute, audioDebug } from './audio.js';
 import { Minimap } from './minimap.js';
-import { t, lang, setLang, LANGUAGES, applyPageText, teamName, weaponName, hackName, hackShort, hackDesc } from './i18n.js';
+import { t, lang, setLang, LANGUAGES, applyPageText, teamName, weaponName, hackName, hackShort, hackDesc, zoneName } from './i18n.js';
 
 const $ = (id) => document.getElementById(id);
 const canvas = $('view');
 
 const renderer = new Renderer(canvas);
-renderer.onSound = playSound;
+// Footsteps on metal (catwalks, the crane, ladders: see World.onMetal) sound like it.
+renderer.onSound = (name, position, intensity, variant) => {
+  const where = position ?? (name === 'step' || name === 'climb' ? me.pos : null);
+  if (name === 'climb' || (name === 'step' && where && world?.onMetal(where))) name = 'stepMetal';
+  playSound(name, position, intensity, variant);
+};
 
 // ---- language ---------------------------------------------------------------
 // The main menu's English / 한국어 switch (remembered in this browser).
@@ -43,9 +50,86 @@ function showStatus() {
   else $('status').textContent = status.key ? t(status.key, { error: errorText(status.err) }) : errorText(status.err);
 }
 
+// ---- main menu: Join / Create tabs; the mode of rooms we host -----------------
+// The tab is remembered (Join the first time, and always from an invite link).
+
+let menuTab = 'join';
+let hostMode = 'normal'; // game mode (MODES)
+let hostLimit = 'limit'; // hacks per life: 'limit' (HACK_LIMIT) or 'any'
+try {
+  menuTab = localStorage.getItem('hackfps.tab') === 'host' ? 'host' : 'join';
+  hostMode = MODES[localStorage.getItem('hackfps.gameMode')] ? localStorage.getItem('hackfps.gameMode') : 'normal';
+  hostLimit = localStorage.getItem('hackfps.mode') === 'any' ? 'any' : 'limit';
+} catch { /* (storage blocked) */ }
+const remember = (key, value) => { try { localStorage.setItem(key, value); } catch { /* (storage blocked) */ } };
+
+function showMenuTab(tab) {
+  menuTab = tab;
+  for (const b of $('menuTabs').children) {
+    b.classList.toggle('on', b.dataset.tab === tab);
+    b.setAttribute('aria-selected', String(b.dataset.tab === tab));
+  }
+  $('joinTab').hidden = tab !== 'join';
+  $('hostTab').hidden = tab !== 'host';
+  $('menu').querySelector('.panel').classList.toggle('wide', tab === 'host');
+}
+$('menuTabs').addEventListener('click', (e) => {
+  const tab = e.target.closest('button')?.dataset.tab;
+  if (!tab) return;
+  showMenuTab(tab);
+  remember('hackfps.tab', tab);
+  if (tab === 'join') $('codeInput').focus();
+});
+
+const MODE_ICONS = { normal: '💻', melee: '🔪', headshot: '🎯' };
+// A card per mode: name, what it is, and the hacks it turns off.
+function showModeCards() {
+  $('modeCards').replaceChildren(...Object.entries(MODES).map(([id, m]) => {
+    const card = document.createElement('button');
+    card.type = 'button';
+    card.setAttribute('role', 'radio');
+    card.dataset.mode = id;
+    card.classList.toggle('on', id === hostMode);
+    card.setAttribute('aria-checked', String(id === hostMode));
+    const icon = document.createElement('span');
+    icon.className = 'modeIcon';
+    icon.textContent = MODE_ICONS[id];
+    const name = document.createElement('b');
+    name.textContent = t(`mode.${id}`);
+    const desc = document.createElement('span');
+    desc.className = 'modeDesc';
+    desc.textContent = t(`mode.${id}.desc`, { n: m.killTarget });
+    const hacks = document.createElement('small');
+    hacks.textContent = m.hacksOff.length
+      ? t('mode.hacksOff', { list: m.hacksOff.map((h) => hackShort(HACKS.find((x) => x.id === h))).join(', ') })
+      : t('mode.allHacks');
+    card.append(icon, name, desc, hacks);
+    return card;
+  }));
+  for (const b of $('hackLimitPick').children) {
+    b.textContent = b.dataset.limit === 'any' ? t('menu.limitAny') : t('menu.limitN', { n: HACK_LIMIT });
+    b.classList.toggle('on', b.dataset.limit === hostLimit);
+    b.setAttribute('aria-checked', String(b.dataset.limit === hostLimit));
+  }
+}
+$('modeCards').addEventListener('click', (e) => {
+  const id = e.target.closest('button')?.dataset.mode;
+  if (!id) return;
+  hostMode = id;
+  remember('hackfps.gameMode', id);
+  showModeCards();
+});
+$('hackLimitPick').addEventListener('click', (e) => {
+  const limit = e.target.closest('button')?.dataset.limit;
+  if (!limit) return;
+  hostLimit = limit;
+  remember('hackfps.mode', limit);
+  showModeCards();
+});
+
 function showLanguage() {
   applyPageText();
-  $('hackMode').options[0].textContent = t('mode.limit', { n: HACK_LIMIT });
+  showModeCards();
   for (const b of $('langSwitch').children) b.classList.toggle('on', b.dataset.lang === lang);
   showStatus();
 }
@@ -58,6 +142,7 @@ for (const [code, label] of Object.entries(LANGUAGES)) {
   $('langSwitch').appendChild(b);
 }
 showLanguage();
+showMenuTab(menuTab);
 
 // Models must be loaded before the game can start.
 $('hostBtn').disabled = true;
@@ -67,8 +152,9 @@ let world;
 const minimap = new Minimap($('minimap'), () => world, renderer);
 try {
   const [, map] = await Promise.all([loadAssets(renderer.renderer), loadMap(renderer.renderer)]);
+  useMapSpots(map.meta);
   world = new World(map.collision, map.meta);
-  renderer.setMap(map.visual, map.lightmap, map.meta.lightmap?.intensity);
+  renderer.setMap(map.visual, map.props, map.lightmap, map.meta.lightmap?.intensity, world);
 } catch (err) {
   setStatusError(err, 'status.loadFailed');
   throw err;
@@ -96,6 +182,7 @@ const me = {
   spread: 0, // current shot spread (radians), follows movement
   crouched: false, // (hold Ctrl or Shift; set by World.stepPlayer: stays down until there's room to stand)
   crouch: 0, // 0 = standing .. 1 = crouched, eased over CROUCH_TIME (the eyes)
+  climbing: false, // on a ladder (set by World.stepPlayer): no shooting, gun away
   protectedUntil: 0, // performance.now() ms; spawn protection (for the HUD; the host enforces it)
 };
 let deathInfo = null; // { killer, headshot, at } while dead
@@ -113,6 +200,14 @@ const keys = new Set();
 let mouseDown = false;
 let triggerPressed = false; // a click since the last frame (semi-automatic weapons)
 let aimHeld = false; // right mouse button
+// The smoke bomb (C: take it out / put it away; a click throws it).
+let smokeHeld = false;
+let throwUntil = 0; // performance.now() the throw in progress ends (then back to the weapon)
+let smokeReadyAt = 0; // ... ours is usable again (0: ready)
+let lastThrowAt = -1e9;
+const smokes = []; // smoke clouds out: { id, pos, at (s, our clock), duration }
+const smokesDone = new Set(); // ids of clouds that have cleared (the host's next snapshot may still list one)
+const nowSec = () => performance.now() / 1000;
 const locked = () => document.pointerLockElement === canvas;
 const weapon = () => WEAPONS[me.weapon];
 const BASE_FOV = renderer.camera.fov;
@@ -128,16 +223,17 @@ window.addEventListener('keydown', (e) => {
   if ((e.ctrlKey || e.altKey) && locked()) e.preventDefault(); // (Ctrl: crouch, Alt: aim hack; not the browser's shortcuts)
   if (e.code === 'Tab' && session) { e.preventDefault(); $('scoreboard').hidden = false; }
   if (e.code === 'KeyR' && session && locked()) startReload(performance.now());
+  if (e.code === 'KeyC' && session && locked()) toggleSmoke(performance.now());
   if (e.code === 'KeyM' && session) addFeed(t(toggleMute() ? 'feed.soundOff' : 'feed.soundOn'));
   // Weapon switching (number keys, wheel): only for the player named "Admin".
   // (Q / E: the fly hack.)
-  if (session && locked() && isAdmin()) {
+  if (session && locked() && canSwitch()) {
     const digit = /^Digit(\d)$/.exec(e.code);
     if (digit && WEAPONS[digit[1] - 1]) switchWeapon(digit[1] - 1, performance.now());
   }
 });
 window.addEventListener('wheel', (e) => {
-  if (!session || !locked() || !isAdmin() || Math.abs(e.deltaY) < 1) return;
+  if (!session || !locked() || !canSwitch() || Math.abs(e.deltaY) < 1) return;
   switchWeapon((me.weapon + (e.deltaY > 0 ? 1 : WEAPONS.length - 1)) % WEAPONS.length, performance.now());
 });
 canvas.addEventListener('contextmenu', (e) => e.preventDefault());
@@ -177,7 +273,7 @@ function readMoveInput() {
     right: k('KeyD') - k('KeyA'),
     jump: !!k('Space'),
     yaw: me.yaw,
-    speed: speedHack(),
+    speed: speedHack() * (weapon().moveSpeed ?? 1), // (a little faster with the knife)
     jumpHeight: has('speed') ? SPEED_HACK_JUMP : 1,
     fly: has('fly') ? k('KeyQ') - k('KeyE') : undefined,
     noclip: has('noclip'),
@@ -198,6 +294,10 @@ function onMessage(msg) {
       myId = msg.id;
       myTeam = msg.team ?? 0;
       hackLimit = msg.hackLimit ?? HACK_LIMIT;
+      modeId = MODES[msg.mode] ? msg.mode : 'normal';
+      mode = MODES[modeId];
+      if (!weaponAllowed(mode, buyChoice)) buyChoice = startWeapon(mode);
+      buyHacks &= ~hacksOffMask(mode);
       renderer.setLocalTeam(myTeam);
       showRoomInfo();
       teleport(msg.pos, msg.yaw);
@@ -213,18 +313,33 @@ function onMessage(msg) {
       snapshots.push({ time: performance.now(), n: msg.n, players });
       if (snapshots.length > 30) snapshots.shift();
       latestPlayers = msg.players;
+      teamKills = msg.tk ?? null;
       const mine = players.get(myId);
       if (mine) {
         me.hp = mine.hp;
         me.dead = mine.dead;
         me.money = mine.m ?? 0;
+        // Our smoke bomb's cooldown (the host's word, except just after a throw it hasn't heard yet).
+        if (mine.sc > 0) smokeReadyAt = performance.now() + mine.sc * 1000;
+        else if (performance.now() - lastThrowAt > 1500) smokeReadyAt = 0;
         renderer.setViewmodel(mine.skin); // first-person body in our own skin
       }
       for (const id of renderer.avatars.keys()) if (!players.has(id)) renderer.removeAvatar(id);
       if (msg.pk) renderer.updatePickups(msg.pk, msg.pt);
+      for (const s of msg.sk ?? []) addSmoke(s.id, s.p, s.d, s.age); // (clouds already out when we joined)
       updateScoreboard();
       break;
     }
+    case 'throw': // someone threw a smoke bomb (ours was shown already)
+      if (msg.from !== myId) renderer.avatars.get(msg.from)?.throwSmoke(!!msg.m);
+      break;
+    case 'nade': // ... it left their hand
+      renderer.smokes?.addBomb(msg.id, msg.p, msg.v);
+      break;
+    case 'smoke': // ... and went off
+      addSmoke(msg.id, msg.p, msg.d);
+      playSound('hiss', msg.p);
+      break;
     case 'shot':
       if (msg.from !== myId) { // (our own were drawn instantly)
         const ends = msg.es ?? [msg.e];
@@ -233,8 +348,11 @@ function onMessage(msg) {
       }
       break;
     case 'hit':
+      if (!msg.blocked && msg.victim !== myId) renderer.hitSparks(msg.victim, msg.from, !!msg.hs);
       if (msg.attacker === myId) {
-        showHitmarker(msg.blocked ? 'blocked' : msg.hp === 0 ? 'kill' : msg.hs ? 'head' : 'body');
+        const kind = msg.blocked ? 'blocked' : msg.hp === 0 ? 'kill' : msg.hs ? 'head' : 'body';
+        showHitmarker(kind);
+        if (kind !== 'blocked') playSound(kind === 'kill' ? 'hitKill' : kind === 'head' ? 'hitHead' : 'hitBody', null);
         if (msg.hp === 0 && !msg.blocked) showKillConfirm(nameOf(msg.victim), msg.hs);
       }
       if (msg.victim === myId && !msg.blocked) {
@@ -268,6 +386,9 @@ function onMessage(msg) {
       me.protectedUntil = performance.now() + SPAWN_PROTECTION * 1000;
       me.ammo = WEAPONS.map((w) => w.magSize);
       me.weapon = msg.w ?? DEFAULT_WEAPON; // back to the spawn weapon
+      smokeHeld = false; // (a fresh smoke bomb)
+      throwUntil = 0;
+      smokeReadyAt = 0;
       me.reloadEnd = 0;
       me.switchEnd = 0;
       me.scope = 0;
@@ -313,6 +434,7 @@ function teleport(pos, yaw) {
   me.pitch = 0;
   me.crouched = false;
   me.crouch = 0;
+  me.climbing = false;
 }
 const myEye = () => [me.pos[0], me.pos[1] + eyeHeight(me.crouch), me.pos[2]];
 
@@ -343,6 +465,7 @@ function updateReload(now) {
 // new one can't fire until it's drawn (SWITCH_TIME). The host enforces both.
 function switchWeapon(index, now) {
   if (me.dead || index === me.weapon || !WEAPONS[index]) return;
+  if (!throwUntil) smokeHeld = false; // (the smoke bomb goes away)
   me.lastWeapon = me.weapon;
   me.weapon = index;
   me.reloadEnd = 0;
@@ -356,7 +479,7 @@ function switchWeapon(index, now) {
 const BOLT_BUSY = 0.75; // seconds after a sniper shot the bolt is being worked
 function updateScope(dt, now) {
   const w = weapon();
-  const want = aimHeld && w.zoomFov && !me.dead && !me.reloadEnd && now >= me.switchEnd
+  const want = aimHeld && w.zoomFov && !smokeHeld && !me.dead && !me.reloadEnd && now >= me.switchEnd
     && now - lastShotTime > BOLT_BUSY * (fireCooldown(w, me.hack) / w.cooldown) * 1000;
   me.scope = want ? Math.min(1, me.scope + dt / w.scopeTime) : Math.max(0, me.scope - dt / 0.12);
   const fov = w.zoomFov ? BASE_FOV + (w.zoomFov - BASE_FOV) * me.scope : BASE_FOV;
@@ -364,10 +487,24 @@ function updateScope(dt, now) {
 }
 
 function tryShoot(now) {
+  if (smokeHeld) { // a click throws the smoke bomb instead (not the triggerbot)
+    const clicked = triggerPressed || mouseDown;
+    triggerPressed = false;
+    if (clicked && !throwUntil && !me.dead && !me.climbing && locked()) throwSmoke(now);
+    return;
+  }
   const w = weapon();
-  const pulled = w.auto ? mouseDown : triggerPressed; // semi-automatic: one shot per click
+  const pulled = (w.auto ? mouseDown : triggerPressed) // semi-automatic: one shot per click
+    || (has('trigger') && !me.dead && crosshairOnEnemy(w)); // the triggerbot pulls it for us
   triggerPressed = false;
-  if (!pulled || me.dead || !locked() || now - lastShotTime < fireCooldown(w, me.hack) * 1000 || now < me.switchEnd) return;
+  if (!pulled || me.dead || me.climbing || !locked() || now - lastShotTime < fireCooldown(w, me.hack) * 1000 || now < me.switchEnd) return;
+  if (w.melee) { // a knife swing: the host finds who it hits
+    lastShotTime = now;
+    me.protectedUntil = 0;
+    renderer.kickGun();
+    session.send({ t: 'shoot', w: me.weapon, yaw: me.yaw, pitch: me.pitch, v: viewing }, true);
+    return;
+  }
   const infinite = has('ammo');
   if (me.reloadEnd && !infinite) return;
   if (me.ammo[me.weapon] <= 0 && !infinite) return startReload(now); // pulling the trigger on empty reloads
@@ -383,12 +520,16 @@ function tryShoot(now) {
   // Shotgun: several pellets in a cone around the aimed direction.
   const dirs = w.pellets ? Array.from({ length: w.pellets }, () => spreadDir(aim, w.pelletSpread)) : [aim];
   for (const dir of dirs) {
-    let dist = world.raycast(origin, dir, MAX_RANGE);
+    // (The wallbang hack: through walls to anyone along the shot; a spark where it goes in.)
+    const wall = world.raycast(origin, dir, MAX_RANGE);
+    let dist = has('wallbang') ? MAX_RANGE : wall;
     for (const [id, avatar] of renderer.avatars) {
       if (avatar.dead || id === myId || avatar.team === myTeam) continue;
       dist = Math.min(dist, rayPlayer(origin, dir, avatar.object.position.toArray(), avatar.pose).t);
     }
-    pendingTracers.push({ end: origin.map((o, i) => o + dir[i] * dist), hit: dist < MAX_RANGE });
+    if (dist >= MAX_RANGE) dist = wall;
+    const through = dist > wall + 0.01 ? origin.map((o, i) => o + dir[i] * wall) : null;
+    pendingTracers.push({ end: origin.map((o, i) => o + dir[i] * dist), hit: dist < MAX_RANGE, wall: through });
   }
 
   session.send(w.pellets
@@ -432,7 +573,15 @@ function renderRemotePlayers(now, dt) {
   viewing = [a.n, b.n, Math.round(t * 1000) / 1000]; // (sent with shots: the host checks hits against this)
 
   for (const [id, pb] of b.players) {
-    if (id === myId) continue;
+    if (id === myId) { // our fake-lag afterimage; we're see-through while hidden
+      const ghost = ghostState(pb);
+      renderer.updateGhost(id, pb.name, pb.skin, pb.team, ghost, dt);
+      // (Not drawn when we're in it: standing still, it covered the camera.)
+      const mine = renderer.ghosts.get(id);
+      if (mine) mine.object.visible = Math.hypot(ghost.pos[0] - me.pos[0], ghost.pos[2] - me.pos[2]) > OWN_GHOST_HIDE;
+      renderer.view?.setFade(pb.fl && !pb.rv ? seeThrough(Math.hypot(me.vel[0], me.vel[2]) / speedHack()) : 1);
+      continue;
+    }
     if (pb.gone) { renderer.removeAvatar(id); continue; } // in the buy menu
     let pa = a.players.get(id) ?? pb;
     // Don't slide across the map when someone respawns.
@@ -441,20 +590,66 @@ function renderRemotePlayers(now, dt) {
     // Velocity between the two snapshots (none between the same one: the
     // character then works it out from the position).
     const vel = pa !== pb && span > 0 ? [0, 1, 2].map((i) => (pb.p[i] - pa.p[i]) / (span / 1000)) : undefined;
+    // On a ladder the body faces it, wherever they look.
+    const ladder = pb.l ? world.ladderAt(pos) : null;
     renderer.updateAvatar(id, pb.name, pb.skin, pb.team, {
       pos,
       vel,
       ground: groundBelow(pos),
-      yaw: lerpAngle(pa.yaw, pb.yaw, t),
+      yaw: ladder ? Math.atan2(ladder.n[0], ladder.n[1]) : lerpAngle(pa.yaw, pb.yaw, t),
       pitch: pa.pitch + (pb.pitch - pa.pitch) * t,
       dead: pb.dead,
       crouch: !!pb.c,
+      climbing: !!pb.l,
       reloading: !!pb.rl,
       protected: !!pb.sp,
       weapon: pb.w ?? 0,
+      smoke: !!pb.sm, // holding the smoke bomb
       fast: hasHack(pb.h ?? 0, 'ammo'), // (teammates only: enemies' hacks aren't sent)
     }, dt);
+    // Fake-lag hack: hidden from enemies, see-through to the team (fully
+    // there while revealed by attacking); the afterimage.
+    const avatar = renderer.avatars.get(id);
+    const hidden = !!pb.fl && !pb.rv;
+    const enemy = pb.team !== myTeam;
+    avatar.setFade(hidden ? (enemy ? 0 : seeThrough(Math.hypot(avatar.velocity.x, avatar.velocity.z))) : 1);
+    avatar.fakeHidden = hidden && enemy; // (hacks go by the afterimage)
+    renderer.updateGhost(id, pb.name, pb.skin, pb.team, ghostState(pb), dt);
+    // Enemies' names don't show through smoke (nor their afterimage's).
+    if (enemy) {
+      const eye = myEye();
+      for (const shown of [avatar, renderer.ghosts.get(id)]) {
+        if (!shown?.label.visible) continue;
+        const p = shown.object.position;
+        if (smoked(eye, [p.x, p.y + 1.6, p.z])) shown.label.visible = false;
+      }
+    }
   }
+}
+
+// Fake-lag: how see-through a hidden player is to themself and their team,
+// more so moving (speed: m/s). Rounded, so the materials aren't redone
+// every frame.
+const SEE_THROUGH = [0.5, 0.2]; // standing, at full speed
+const OWN_GHOST_HIDE = 0.5; // m: our own afterimage isn't drawn this close (it covered the camera)
+function seeThrough(speed) {
+  const k = Math.min(1, speed / MOVE_SPEED);
+  return Math.round((SEE_THROUGH[0] + (SEE_THROUGH[1] - SEE_THROUGH[0]) * k) * 20) / 20;
+}
+
+// A fake-lag player's afterimage (pb.g from the snapshot) as a character
+// state for the renderer, or null.
+function ghostState(pb) {
+  const g = pb.fl && pb.g;
+  if (!g) return null;
+  return { pos: g.p, vel: [0, 0, 0], ground: groundBelow(g.p), yaw: g.yaw, pitch: g.pitch, dead: false, crouch: !!g.c, weapon: g.w ?? 0 };
+}
+
+// Where an enemy appears to us (for the aim hack and triggerbot): { pos,
+// pose }, a fake-lag player's afterimage while they're hidden (null: none).
+function apparent(id, avatar) {
+  const shown = avatar.fakeHidden ? renderer.ghosts.get(id) : avatar;
+  return shown && { pos: shown.object.position.toArray(), pose: shown.pose };
 }
 
 // ---- HUD -------------------------------------------------------------------
@@ -474,6 +669,7 @@ function feedText(msg) {
     case 'left': return t('feed.left', { name: msg.name });
     case 'kill': return t(msg.hs ? 'feed.killHeadshot' : 'feed.kill', { killer: msg.killer, victim: msg.victim });
     case 'victory': return t('feed.victory', { name: msg.name, team: teamName(msg.team) });
+    case 'teamWins': return t('feed.teamWins', { n: msg.n, team: teamName(msg.team) });
     case 'noBots': return t('feed.noBots');
     default: return msg.text ?? '';
   }
@@ -486,14 +682,14 @@ function addFeed(text) {
   setTimeout(() => div.remove(), 5000);
 }
 
-// Team score = the team's total kills.
+// Team score = the team's kills this round (out of the mode's kill target).
 function updateScoreboard() {
-  const totals = TEAMS.map((_, i) => latestPlayers.filter((p) => p.team === i).reduce((n, p) => n + p.score, 0));
+  const totals = teamKills ?? TEAMS.map((_, i) => latestPlayers.filter((p) => p.team === i).reduce((n, p) => n + p.score, 0));
   const teamScore = $('teamScore');
   teamScore.replaceChildren();
   TEAMS.forEach((team, i) => {
     const span = document.createElement('span');
-    span.textContent = `${teamName(i)} ${totals[i]}`;
+    span.textContent = `${teamName(i)} ${totals[i]}${mode.killTarget ? ` / ${mode.killTarget}` : ''}`;
     span.style.color = team.color;
     if (i === myTeam) span.className = 'mine';
     teamScore.appendChild(span);
@@ -524,22 +720,24 @@ function updateScoreboard() {
 function showRoomInfo() {
   const info = $('roomInfo');
   const label = t(room.hosting ? 'room.hosting' : 'room.joined', { code: room.code });
-  info.textContent = myId ? `${label} · ${hackLimit ? t('room.limit', { n: hackLimit }) : t('room.noLimit')} · ${t('room.team', { team: teamName(myTeam) })}` : label;
+  info.textContent = myId ? `${label} · ${t(`mode.${modeId}`)} · ${hackLimit ? t('room.limit', { n: hackLimit }) : t('room.noLimit')} · ${t('room.team', { team: teamName(myTeam) })}` : label;
   info.style.borderLeft = myId ? `4px solid ${TEAMS[myTeam].color}` : '';
 }
 
 const isAdmin = () => nameOf(myId) === ADMIN_NAME;
+const canSwitch = () => isAdmin() && !mode.weapons; // (modes with set weapons: no switching)
 
 function nameOf(id) {
   return latestPlayers.find((p) => p.id === id)?.name ?? t('hud.someone');
 }
 
-// kind: 'body' | 'head' (gold) | 'kill' (big red) | 'blocked' (grey: spawn-protected)
+// kind: 'body' (small white X) | 'head' (bigger red X) | 'kill' (red skull) | 'blocked' (grey X: spawn-protected)
 function showHitmarker(kind) {
   const el = $('hitmarker');
-  el.classList.remove('body', 'head', 'kill', 'blocked');
+  el.classList.remove('body', 'head', 'kill', 'blocked', 'show');
+  void el.offsetWidth; // (restarts the skull's pop)
   el.classList.add(kind);
-  flash('hitmarker', kind === 'kill' ? 260 : 120);
+  flash('hitmarker', kind === 'kill' ? 500 : kind === 'head' ? 200 : 140);
 }
 
 function showKillConfirm(name, headshot) {
@@ -582,16 +780,32 @@ function updateCrosshair() {
   $('crosshairTicks').style.setProperty('--gap', `${gap.toFixed(1)}px`);
 }
 
+// Where we are, by the map's callout names ("Hospital · 4F", "Hotel · Roof").
+function showLocation() {
+  const z = !me.dead && world.zoneAt(me.pos);
+  let text = '';
+  if (z) {
+    text = zoneName(z.id);
+    if (z.roof !== undefined && me.pos[1] > z.roof - 0.3) text += ` · ${t('hud.roof')}`;
+    else if (z.floor !== undefined && me.pos[1] > z.floor + 2) text += ` · ${Math.floor((me.pos[1] - z.floor + 0.5) / 3) + 1}F`;
+  }
+  if ($('location').textContent !== text) $('location').textContent = text;
+}
+
 function updateHud(now) {
   $('hp').textContent = me.hp;
-  $('weaponName').textContent = isAdmin()
+  $('weaponName').textContent = canSwitch()
     ? WEAPONS.map((w, i) => (i === me.weapon ? `[${i + 1}] ${weaponName(w)}` : `${i + 1}`)).join('  ')
     : weaponName(WEAPONS[me.weapon]);
   $('ammoCount').textContent = has('ammo') ? '∞' : me.ammo[me.weapon];
   $('magSize').textContent = weapon().magSize;
   $('ammo').classList.toggle('empty', me.ammo[me.weapon] === 0 && !has('ammo'));
+  $('ammo').hidden = !!weapon().melee || smokeHeld;
+  if (smokeHeld) $('weaponName').textContent = t('weapon.smoke');
+  updateSmokeHud(now);
   $('hackName').textContent = me.hack && !me.dead ? hackList(me.hack).map(hackName).join(' · ') : '';
   minimap.update(has('map') && !me.dead, me, myTeam);
+  showLocation();
   renderer.wallHack = has('wall') && !me.dead;
   updateVictory(now);
   $('scope').hidden = me.scope < 0.85;
@@ -636,12 +850,16 @@ let buy = null; // { readyAt (performance.now ms), sent } while the menu is open
 let buyChoice = DEFAULT_WEAPON; // remembered between deaths
 let buyHacks = 0; // hacks picked (bit mask), remembered too
 let hackLimit = HACK_LIMIT; // the room's mode (from the host's welcome): hacks per life (0: any number)
+let modeId = 'normal'; // ... and game mode (MODES)
+let mode = MODES.normal;
+let teamKills = null; // [blue, red] this round (from snapshots)
 
 // Options: name, price (and a description for hacks). Radio buttons (one
 // weapon) or checkboxes (hacks): onPick(index, checked).
 function buyOptions(items, group, onPick, type = 'radio') {
   return items.map((item, i) => {
     const label = document.createElement('label');
+    if (item.id) label.dataset.id = item.id;
     const input = document.createElement('input');
     input.type = type;
     input.name = group;
@@ -650,6 +868,15 @@ function buyOptions(items, group, onPick, type = 'radio') {
     const name = document.createElement('span');
     name.className = 'name';
     name.textContent = item.name;
+    if (item.off) label.classList.add('off');
+    // The victory hack is the game's goal: marked so (see style.css).
+    if (item.id === 'victory' && !item.off) {
+      const goal = document.createElement('b');
+      goal.className = 'goal';
+      goal.textContent = t('buy.goal');
+      name.prepend('🏆 ');
+      name.append(goal);
+    }
     if (item.desc) {
       const desc = document.createElement('small');
       desc.textContent = item.desc;
@@ -657,7 +884,7 @@ function buyOptions(items, group, onPick, type = 'radio') {
     }
     const price = document.createElement('span');
     price.className = 'price';
-    price.textContent = item.price ? `$${item.price.toLocaleString()}` : t('buy.free');
+    price.textContent = item.off ? t('buy.off') : item.price ? `$${item.price.toLocaleString()}` : t('buy.free');
     label.append(input, name, price);
     return label;
   });
@@ -681,9 +908,17 @@ function openBuyMenu(msg) {
   } else {
     info.textContent = t(`buy.${msg.round ? 'newRound' : 'start'}${hackLimit ? 'Limit' : 'Any'}`, { n: hackLimit });
   }
+  // Modes other than the default: what it is and the goal.
+  if (modeId !== 'normal') {
+    const rules = document.createElement('div');
+    rules.className = 'modeRules';
+    rules.textContent = `${t(`mode.${modeId}`)}: ${t(`mode.${modeId}.desc`, { n: mode.killTarget })}`;
+    info.append(rules);
+  }
   $('buyHacksMode').textContent = hackLimit ? t('buy.upTo', { n: hackLimit }) : t('buy.anyNumber');
-  const weapons = WEAPONS.map((w) => ({ name: weaponName(w), price: w.price }));
-  const hacks = HACKS.map((h) => ({ name: hackName(h), desc: hackDesc(h), price: h.price }));
+  const off = hacksOffMask(mode);
+  const weapons = WEAPONS.map((w, i) => ({ name: weaponName(w), price: weaponPrice(mode, i), off: !weaponAllowed(mode, i) }));
+  const hacks = HACKS.map((h, i) => ({ id: h.id, name: hackName(h), desc: hackDesc(h), price: h.price, off: (off & (1 << i)) !== 0 }));
   $('buyList').replaceChildren(...buyOptions(weapons, 'buyWeapon', (i) => { buyChoice = i; }));
   $('buyHacks').replaceChildren(...buyOptions(hacks, 'buyHack', (i, on) => {
     if (on && !withinHackLimit(buyHacks | (1 << i), hackLimit)) return; // (locked next frame)
@@ -692,10 +927,11 @@ function openBuyMenu(msg) {
   // Last time's picks if still affordable: the weapon, then the hacks
   // dropping the priciest first (also down to the room's limit).
   const priciest = () => HACKS.reduce((best, h, i) => (buyHacks & (1 << i) && (best < 0 || h.price > HACKS[best].price) ? i : best), -1);
-  if (WEAPONS[buyChoice].price > me.money) buyChoice = DEFAULT_WEAPON;
-  while (buyHacks && (!withinHackLimit(buyHacks, hackLimit) || WEAPONS[buyChoice].price + hacksPrice(buyHacks) > me.money)) buyHacks &= ~(1 << priciest());
+  if (!weaponAllowed(mode, buyChoice) || weaponPrice(mode, buyChoice) > me.money) buyChoice = startWeapon(mode);
+  buyHacks &= ~off;
+  while (buyHacks && (!withinHackLimit(buyHacks, hackLimit) || weaponPrice(mode, buyChoice) + hacksPrice(buyHacks) > me.money)) buyHacks &= ~(1 << priciest());
   $('botRow').hidden = !session?.isHost;
-  $('botFill').value = String(botFill);
+  showBotFill();
   $('buyMenu').hidden = false;
   if (document.pointerLockElement) document.exitPointerLock();
   updateBuyMenu(now);
@@ -713,22 +949,24 @@ function updateBuyMenu(now) {
   // The menu needs the mouse pointer: release it if anything locked it.
   if (!buy.sent && document.pointerLockElement) document.exitPointerLock();
   $('buyMoney').textContent = `$${me.money.toLocaleString()}`;
-  const weaponPrice = WEAPONS[buyChoice].price;
+  const price = weaponPrice(mode, buyChoice);
   const hackPrice = hacksPrice(buyHacks);
+  const off = hacksOffMask(mode);
   // Locked: what can't be added with the rest of the picks (picked hacks can
   // always be unticked; at the room's limit the other hacks are locked).
   const full = hackLimit && hackCount(buyHacks) >= hackLimit;
-  const mark = (list, items, chosen, otherPrice, atLimit = false) => list.querySelectorAll('label').forEach((label, i) => {
+  // (Off in this mode: always locked.)
+  const mark = (list, prices, isOff, chosen, otherPrice, atLimit = false) => list.querySelectorAll('label').forEach((label, i) => {
     const input = label.firstChild;
     const on = chosen(i);
-    const locked = !on && (atLimit || items[i].price + otherPrice > me.money);
+    const locked = isOff(i) || (!on && (atLimit || prices[i] + otherPrice > me.money));
     label.classList.toggle('locked', locked);
     input.disabled = locked || buy.sent;
     input.checked = on;
   });
-  mark($('buyList'), WEAPONS, (i) => i === buyChoice, hackPrice);
-  mark($('buyHacks'), HACKS, (i) => (buyHacks & (1 << i)) !== 0, weaponPrice + hackPrice, full);
-  const total = weaponPrice + hackPrice;
+  mark($('buyList'), WEAPONS.map((w, i) => weaponPrice(mode, i)), (i) => !weaponAllowed(mode, i), (i) => i === buyChoice, hackPrice);
+  mark($('buyHacks'), HACKS.map((h) => h.price), (i) => (off & (1 << i)) !== 0, (i) => (buyHacks & (1 << i)) !== 0, price + hackPrice, full);
+  const total = price + hackPrice;
   $('buyTotal').textContent = t('buy.total', { n: total.toLocaleString() });
   $('buyTotal').classList.toggle('over', total > me.money);
   const start = $('buyStart');
@@ -738,7 +976,7 @@ function updateBuyMenu(now) {
 }
 
 $('buyStart').addEventListener('click', () => {
-  if (!buy || buy.sent || !session || WEAPONS[buyChoice].price + hacksPrice(buyHacks) > me.money) return;
+  if (!buy || buy.sent || !session || weaponPrice(mode, buyChoice) + hacksPrice(buyHacks) > me.money) return;
   buy.sent = true;
   session.send({ t: 'spawn', w: buyChoice, h: buyHacks }, true);
   if (!hasHack(buyHacks, 'victory')) requestLock(); // (a click: allowed to lock the mouse)
@@ -749,20 +987,32 @@ $('buyStart').addEventListener('click', () => {
 let botFill = 0;
 try { botFill = Number(localStorage.getItem('hackfps.bots')) || 0; } catch { /* (storage blocked) */ }
 
-// Host only: the hack mode of rooms we host (main menu), remembered too.
-try { $('hackMode').value = localStorage.getItem('hackfps.mode') === 'any' ? 'any' : 'limit'; } catch { /* (storage blocked) */ }
-$('hackMode').addEventListener('change', () => {
-  try { localStorage.setItem('hackfps.mode', $('hackMode').value); } catch { /* (storage blocked) */ }
+// Host only: whether bots buy hacks (remembered too).
+let botHacks = true;
+try { botHacks = localStorage.getItem('hackfps.botHacks') !== '0'; } catch { /* (storage blocked) */ }
+$('botHacks').checked = botHacks;
+$('botHacks').addEventListener('change', () => {
+  botHacks = $('botHacks').checked;
+  try { localStorage.setItem('hackfps.botHacks', botHacks ? '1' : '0'); } catch { /* (storage blocked) */ }
+  if (session?.isHost) session.send({ t: 'botHacks', on: botHacks });
 });
 
-$('botFill').addEventListener('change', () => {
-  botFill = Number($('botFill').value);
+const showBotFill = () => $('botFill').querySelectorAll('button').forEach((b) => {
+  b.classList.toggle('on', Number(b.dataset.n) === botFill);
+  b.setAttribute('aria-checked', String(Number(b.dataset.n) === botFill));
+});
+$('botFill').addEventListener('click', (e) => {
+  const button = e.target.closest('button');
+  if (!button) return;
+  botFill = Number(button.dataset.n);
+  showBotFill();
   try { localStorage.setItem('hackfps.bots', String(botFill)); } catch { /* (storage blocked) */ }
   if (session?.isHost) session.send({ t: 'bots', n: botFill });
 });
 
 // ---- victory ---------------------------------------------------------------
-// Someone bought the victory hack: their team wins; a new round follows
+// Someone bought the victory hack, or a team reached the mode's kill
+// target: that team wins; a new round follows
 // (the host sends everyone back to the buy menu with $0).
 
 let victoryUntil = 0; // performance.now() ms
@@ -780,7 +1030,7 @@ function showVictory(msg) {
   title.textContent = t('victory.wins', { team: teamName(msg.team) });
   title.style.color = team.color;
   const by = document.createElement('div');
-  by.textContent = t('victory.by', { name: msg.by });
+  by.textContent = msg.by ? t('victory.by', { name: msg.by }) : t('victory.kills', { n: msg.kills });
   const next = document.createElement('div');
   next.className = 'next';
   el.append(title, by, next);
@@ -812,7 +1062,9 @@ function aimLock() {
   let bestAngle = limit;
   for (const [id, avatar] of renderer.avatars) {
     if (avatar.dead || id === myId || avatar.team === myTeam) continue;
-    const head = headAABB(avatar.object.position.toArray(), avatar.pose);
+    const seen = apparent(id, avatar);
+    if (!seen) continue;
+    const head = headAABB(seen.pos, seen.pose);
     for (let i = 0; i < 3; i++) _head[i] = (head.min[i] + head.max[i]) / 2;
     const d = _head.map((v, i) => v - eye[i]);
     const dist = Math.hypot(...d);
@@ -820,12 +1072,124 @@ function aimLock() {
     const angle = Math.acos(Math.max(-1, Math.min(1, dir[0] * view[0] + dir[1] * view[1] + dir[2] * view[2])));
     if (angle >= bestAngle) continue;
     if (world.raycast(eye, dir, dist) < dist - 0.05) continue; // behind a wall
+    if (smoked(eye, _head)) continue; // behind (or in) smoke
     bestAngle = angle;
     best = d;
   }
   if (!best) return;
   me.yaw = Math.atan2(-best[0], -best[2]);
   me.pitch = Math.atan2(best[1], Math.hypot(best[0], best[2]));
+}
+
+// ---- smoke bomb --------------------------------------------------------------
+// C takes it out, or puts it away; while it's cooling down C does nothing
+// but shake its icon. A click throws it (the host starts the cooldown and
+// flies it; we just show the throw), then we're back on the weapon.
+
+function toggleSmoke(now) {
+  if (me.dead) return;
+  if (smokeHeld) {
+    if (!throwUntil) smokeHeld = false;
+    return;
+  }
+  if (now < smokeReadyAt) {
+    const icon = $('smokeIcon');
+    icon.classList.remove('shake');
+    void icon.offsetWidth; // (restarts the shake)
+    icon.classList.add('shake');
+    return;
+  }
+  smokeHeld = true;
+}
+
+function throwSmoke(now) {
+  const moving = Math.hypot(me.vel[0], me.vel[2]) > 1;
+  session.send({ t: 'throw', yaw: me.yaw, pitch: me.pitch, m: moving ? 1 : 0 }, true);
+  renderer.view?.throwSmoke(moving);
+  throwUntil = now + THROW_TIME * 1000;
+  lastThrowAt = now;
+  smokeReadyAt = now + SMOKE.cooldown * 1000;
+  me.protectedUntil = 0;
+}
+
+// A smoke cloud out (popped `age` seconds ago).
+function addSmoke(id, pos, duration, age = 0) {
+  if (smokesDone.has(id) || smokes.some((s) => s.id === id)) return;
+  smokes.push({ id, pos, at: nowSec() - age, duration });
+  renderer.smokes?.addCloud(id, pos, duration, age);
+}
+
+// Is the line of sight from a to b through smoke (for the aim hack,
+// triggerbot, enemy names)?
+const smoked = (a, b) => smokeBlocks(smokes, a, b, nowSec());
+
+// The smoke bomb's icon (bottom right): ready, held, or cooling down (the
+// part still to go shaded, the seconds left); and the view greyed inside a
+// cloud.
+function updateSmokeHud(now) {
+  const icon = $('smokeIcon');
+  icon.hidden = me.dead;
+  const left = Math.max(0, smokeReadyAt - now) / 1000;
+  icon.classList.toggle('held', smokeHeld);
+  icon.classList.toggle('cooling', left > 0);
+  icon.style.setProperty('--left', (left / SMOKE.cooldown).toFixed(3));
+  icon.querySelector('.cd').textContent = left > 0 ? Math.ceil(left) : '';
+  const eye = myEye();
+  let inside = 0;
+  for (const s of smokes) {
+    const r = smokeRadius(nowSec() - s.at, s.duration);
+    const c = smokeCentre(s.pos);
+    if (r > 0) inside = Math.max(inside, 1 - Math.hypot(eye[0] - c[0], eye[1] - c[1], eye[2] - c[2]) / r);
+  }
+  $('smokeView').style.opacity = Math.min(0.45, inside * 1.2).toFixed(3); // (light: the cloud's own near puffs thin out, see Smokes)
+  renderer.setTrajectory(smokeHeld && !throwUntil && !me.dead ? predictThrow(renderer.smokeInHand()) : null);
+}
+
+// Where a smoke bomb thrown now would go (as the host flies it: from the
+// eye, not through a wall in front, the same physics), up to where it pops:
+// points every 1/60 s. Drawn from the bomb in our hand (from: [x,y,z], or
+// null), easing into the real path over its first part (seen from right
+// behind it, the path alone was a vertical line).
+function predictThrow(from) {
+  const eye = myEye();
+  const dir = lookDir(me.yaw, me.pitch);
+  const out = Math.max(0.1, Math.min(0.5, world.raycast(eye, dir, 0.6) - 0.1));
+  const g = { pos: eye.map((v, i) => v + dir[i] * out), vel: dir.map((v, i) => v * SMOKE.speed + (i === 1 ? SMOKE.up : 0)), rest: false };
+  const points = [[...g.pos]];
+  for (let k = 0; k < SMOKE.fuse * 60 && !g.rest; k++) {
+    world.stepGrenade(g, 1 / 60);
+    points.push([...g.pos]);
+  }
+  if (from) {
+    const off = from.map((v, i) => v - points[0][i]);
+    const ease = Math.min(points.length - 1, 24); // (the first 0.4 s)
+    for (let k = 0; k <= ease; k++) {
+      const w = (1 - k / ease) ** 2;
+      for (let i = 0; i < 3; i++) points[k][i] += off[i] * w;
+    }
+  }
+  return points;
+}
+
+// ---- triggerbot ---------------------------------------------------------------
+// Is the crosshair (the view's centre, before spread) on an enemy we can see:
+// the first thing along it one of their hitboxes, not a wall? With the
+// knife, only within its reach.
+
+function crosshairOnEnemy(w) {
+  const eye = myEye();
+  const dir = lookDir(me.yaw, me.pitch);
+  let nearest = world.raycast(eye, dir, MAX_RANGE);
+  let onEnemy = false;
+  for (const [id, avatar] of renderer.avatars) {
+    if (avatar.dead || id === myId || avatar.team === myTeam) continue;
+    const seen = apparent(id, avatar); // (a fake-lag player: their afterimage)
+    if (!seen) continue;
+    const t = rayPlayer(eye, dir, seen.pos, seen.pose).t;
+    if (t < nearest) { nearest = t; onEnemy = true; }
+  }
+  if (onEnemy && smoked(eye, eye.map((v, i) => v + dir[i] * nearest))) return false; // through smoke
+  return onEnemy && (!w.melee || nearest <= w.melee.range);
 }
 
 // ---- main loop -------------------------------------------------------------
@@ -845,10 +1209,17 @@ function frame(now) {
     updateScope(dt, now);
     if (has('aim') && (keys.has('AltLeft') || keys.has('AltRight')) && locked() && !me.dead) aimLock();
     tryShoot(now);
+    if (throwUntil && now >= throwUntil) { throwUntil = 0; smokeHeld = false; } // thrown: back to the weapon
+    if (me.dead) { smokeHeld = false; throwUntil = 0; }
+    for (let i = smokes.length - 1; i >= 0; i--) {
+      if (nowSec() - smokes[i].at < smokes[i].duration) continue;
+      smokesDone.add(smokes[i].id);
+      smokes.splice(i, 1);
+    }
 
     if (!me.dead && now - lastStateSent >= 1000 / STATE_SEND_RATE) {
       lastStateSent = now;
-      session.send({ t: 'state', p: me.pos, yaw: me.yaw, pitch: me.pitch, c: me.crouched ? 1 : 0 }, false);
+      session.send({ t: 'state', p: me.pos, yaw: me.yaw, pitch: me.pitch, c: me.crouched ? 1 : 0, l: me.climbing ? 1 : 0, s: smokeHeld ? 1 : 0 }, false);
     }
 
     // Spread eases toward what the current movement allows.
@@ -865,7 +1236,7 @@ function frame(now) {
     menuAngle += dt * 0.05;
   }
 
-  renderer.gun.visible = !!session && !me.dead;
+  renderer.gun.visible = !!session && !me.dead && !me.climbing;
   if (session) {
     const eye = myEye();
     renderer.updateViewmodel(dt, {
@@ -875,11 +1246,13 @@ function frame(now) {
       vel: [me.vel[0], me.onGround ? 0 : me.vel[1], me.vel[2]],
       dead: me.dead,
       crouch: me.crouched,
+      climbing: me.climbing,
       reloading: !!me.reloadEnd,
       ground: me.onGround ? me.pos[1] : groundBelow(me.pos),
       weapon: me.weapon,
+      smoke: smokeHeld,
       fast: has('ammo'),
-      hidden: me.scope > 0.85, // looking through the scope
+      hidden: me.scope > 0.85 || me.climbing, // looking through the scope; on a ladder (no gun)
       eye,
     });
     setListener(eye, lookDir(me.yaw, me.pitch));
@@ -888,7 +1261,10 @@ function frame(now) {
     // hangs ~5 cm above the muzzle while the rifle drops back.
     if (pendingTracers.length) {
       const muzzle = renderer.localMuzzle();
-      for (const shot of pendingTracers) renderer.addTracer(muzzle, shot.end, shot.hit);
+      for (const shot of pendingTracers) {
+        renderer.addTracer(muzzle, shot.end, shot.hit);
+        if (shot.wall) renderer.tracers.addImpact(shot.wall);
+      }
       renderer.kickGun(); // once per trigger pull (a shotgun's pellets are one shot)
     }
     pendingTracers = [];
@@ -946,6 +1322,7 @@ function leaveGame(reason) {
   myId = null;
   snapshots = [];
   latestPlayers = [];
+  teamKills = null;
   deathInfo = null;
   for (const d of damageDirs) d.el.remove();
   damageDirs = [];
@@ -962,6 +1339,8 @@ function leaveGame(reason) {
   renderer.setFov(BASE_FOV);
   renderer.reload = -1;
   renderer.clearAvatars();
+  smokes.length = 0; // (a new room numbers its clouds from 1 again)
+  smokesDone.clear();
   renderer.clearViewmodel();
   renderer.updatePickups(null);
   closeBuyMenu();
@@ -1001,7 +1380,7 @@ $('hostBtn').addEventListener('click', async () => {
     return;
   }
 
-  const server = new HostServer(peer, onMessage, world, { hackLimit: $('hackMode').value === 'any' ? 0 : HACK_LIMIT });
+  const server = new HostServer(peer, onMessage, world, { hackLimit: hostLimit === 'any' ? 0 : HACK_LIMIT, mode: hostMode });
   window.hackfps.server = server; // (dev hook)
   const stopTicker = startTicker(() => server.tick());
   peer.on('error', (err) => console.warn('peer error', err));
@@ -1014,6 +1393,7 @@ $('hostBtn').addEventListener('click', async () => {
   server.handleMessage(HOST_ID, { t: 'join', name: playerName() });
   enterGame(code, true);
   server.handleMessage(HOST_ID, { t: 'bots', n: botFill });
+  server.handleMessage(HOST_ID, { t: 'botHacks', on: botHacks });
 });
 
 $('joinBtn').addEventListener('click', async () => {
@@ -1072,6 +1452,7 @@ window.addEventListener('pagehide', () => { if (session) leaveGame(); });
   const invited = new URLSearchParams(location.search).get('room')?.trim().toUpperCase();
   if (invited && /^[A-Z0-9]{5}$/.test(invited)) {
     $('codeInput').value = invited;
+    showMenuTab('join');
     setStatus('status.invited', { code: invited });
   }
 }

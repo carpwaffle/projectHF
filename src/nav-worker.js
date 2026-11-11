@@ -4,7 +4,9 @@
 //
 // Nodes: places a player can stand, on a CELL grid, on every floor (roads,
 // each storey, stairs, roofs). Edges: to the 8 neighbours on the grid when the
-// step between them is walkable, or a drop down a ledge (one way).
+// step between them is walkable, or a drop down a ledge (one way), and both
+// ways between the foot and the top of each ladder (`ladder` marks the top
+// end's node, so bots know to climb).
 //
 // (Workers can't use the page's import map: full URLs.)
 
@@ -25,16 +27,17 @@ const box = new THREE.Box3();
 const p1 = new THREE.Vector3();
 const p2 = new THREE.Vector3();
 
-self.onmessage = ({ data: { positions, playRadius } }) => {
+self.onmessage = ({ data: { positions, extent, playBounds: [x0, z0, x1, z1], ladders } }) => {
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
   const bvh = new MeshBVH(geometry);
-  const nav = build(bvh, playRadius);
+  const inside = (x, z) => x >= x0 + 0.3 && x <= x1 - 0.3 && z >= z0 + 0.3 && z <= z1 - 0.3;
+  const nav = build(bvh, extent, inside, ladders);
   self.postMessage(nav, Object.values(nav).filter((v) => v?.buffer).map((v) => v.buffer));
 };
 
-function build(bvh, playRadius) {
-  const half = Math.ceil((playRadius + 0.5) / CELL); // grid: -half..half per axis
+function build(bvh, extent, inside, ladders) {
+  const half = Math.ceil((extent + 0.5) / CELL); // grid: -half..half per axis
   const size = half * 2 + 1;
 
   // Heights of the standable surfaces in a column, low to high: upward-facing
@@ -79,7 +82,7 @@ function build(bvh, playRadius) {
     for (let i = 0; i < size; i++) {
       const x = (i - half) * CELL;
       const z = (j - half) * CELL;
-      if (Math.hypot(x, z) > playRadius - 0.3) continue;
+      if (!inside(x, z)) continue;
       const ids = [];
       for (const y of floors(x, z)) {
         if (!fits(x, y, z)) continue;
@@ -117,6 +120,33 @@ function build(bvh, playRadius) {
         }
       }
     }
+  }
+
+  // Ladders: the node nearest its foot (in front, on the floor it stands on)
+  // and the one nearest its top (behind, on the floor it leads to).
+  const ladder = new Uint8Array(count);
+  const near = (x, y, z) => {
+    let best = -1, bestD = 1.2;
+    const ci = Math.round(x / CELL) + half, cj = Math.round(z / CELL) + half;
+    for (let dj = -2; dj <= 2; dj++) {
+      for (let di = -2; di <= 2; di++) {
+        for (const n of cells.get((cj + dj) * size + ci + di) ?? []) {
+          const d = Math.hypot(xs[n] - x, zs[n] - z) + Math.abs(ys[n] - y) * 2;
+          if (d < bestD) { bestD = d; best = n; }
+        }
+      }
+    }
+    return best;
+  };
+  for (const l of ladders) {
+    const foot = near(l.p[0] + l.n[0] * 0.6, l.y0, l.p[1] + l.n[1] * 0.6);
+    const top = near(l.p[0] - l.n[0] * 0.6, l.y1, l.p[1] - l.n[1] * 0.6);
+    if (foot < 0 || top < 0) continue;
+    const cost = (l.y1 - l.y0) * 1.5;
+    edges[foot].push(top, cost);
+    edges[top].push(foot, cost);
+    ladder[top] = 1;
+    ladder[foot] = 1;
   }
 
   // Keep the biggest connected area (drops nodes on top of walls, fences, ...).
@@ -158,6 +188,6 @@ function build(bvh, playRadius) {
   return {
     half, size,
     x: Float32Array.from(xs), y: Float32Array.from(ys), z: Float32Array.from(zs),
-    ok, edgeStart, edgeTo, edgeCost, cellStart, cellNodes,
+    ok, ladder, edgeStart, edgeTo, edgeCost, cellStart, cellNodes,
   };
 }

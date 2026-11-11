@@ -37,6 +37,8 @@ PISTOL_LENGTH = 0.21
 REVOLVER_LENGTH = 0.3
 P90_LENGTH = 0.52
 SHOTGUN_LENGTH = 1.0
+KNIFE_LENGTH = 0.32
+MEDKIT_WIDTH = 0.6  # m: the heal pack (the box it replaced: 0.42 m a side)
 
 # Mixamo animation file -> clip name in the game
 CLIPS = {
@@ -58,7 +60,25 @@ CLIPS = {
     'Crouch Walk Backward': 'crouch_backward',
     'Crouch Walk Left': 'crouch_left',
     'Crouch Walk Right': 'crouch_right',
+    'Climbing Ladder': 'climb',
+    'Boxing Idle': 'knife_idle',  # the knife's guard (upper body over the run, see character.js)
+    # The swing: wind-up, the hook across the body (fastest at frame 16), and
+    # back to the guard; the end (settling, frames 44-61) dropped.
+    'Boxing Swing': [('knife_swing', 4, 44)],
+    # The smoke bomb's throws (standing, moving): only the throw itself, the
+    # wind-up (pin, aim) and the settling after dropped. The hand is fastest
+    # (the release) at frame 57 / 52.
+    'Throw Grenade': [('throw', 35, 70), ('throw_hold', 19, 25)], # (the hold: the grenade in front of the chest, before the pin)
+    'Run And Throw Grenade': [('throw_run', 33, 62)],
 }
+# Clips whose hips sit off the character's origin (Mixamo's ladder climb has
+# them ~1 m to the side and 0.8 m up, where its ladder was): moved so that on
+# average they're where the rest pose has them, over the player's position.
+CENTERED = {'climb'}
+# Clips whose character faces backward compared with the others (Mixamo's
+# ladder climb: the climber faced away from the ladder in the game): turned
+# round (180 degrees about up), hips movement too.
+TURNED = {'climb'}
 # Pistol clips (fbx/Character Animation/Pistol), as pistol_*. Mixamo's pistol
 # jump is one clip: split into up / apex loop / down by frame range (the
 # apex and landing with the hips' rise removed: in the game the physics moves
@@ -147,6 +167,8 @@ NAMED_COLORS = {
     'BulletTip': 'b87333',
     # P90.fbx (renamed from Material.00x, see build_p90)
     'P90Body': '2c2e31', 'P90Metal': '5a5f66', 'P90Mag': '3f4a46',
+    # Knife.fbx (Quaternius Survival Pack)
+    'LightGrey': 'c4c8ce', 'Grey': '5e6268', 'Yellow': 'a07d36',
 }
 
 
@@ -240,7 +262,7 @@ def bones_parent_first(arm):
 def retarget(src, dst, clip_name, frames=None, lock_height=False):
     """Bake src's current action onto dst as a new action named clip_name.
     frames: (first, last) to take only part of it; lock_height: drop the
-    hips' vertical movement (for jump parts)."""
+    hips' vertical movement (for jump parts). CENTERED, TURNED clips: see there."""
     scene = bpy.context.scene
     src_action = src.animation_data.action
     f0, f1 = frames or (int(round(x)) for x in src_action.frame_range)
@@ -254,6 +276,13 @@ def retarget(src, dst, clip_name, frames=None, lock_height=False):
     hips_rest = src.matrix_world @ sbone('Hips').bone.head_local
     root_scale = dst.data.bones['Body'].head_local.z / hips_rest.z
     dst_inv = dst.matrix_world.inverted()
+    turn = Matrix.Rotation(math.pi if clip_name in TURNED else 0, 3, 'Z')
+    shift = Vector((0, 0, 0))
+    if clip_name in CENTERED:
+        for frame in range(f0, f1 + 1):
+            scene.frame_set(frame)
+            shift += src.matrix_world @ sbone('Hips').head - hips_rest
+        shift /= f1 - f0 + 1
     # Feet are positioned from their shins, so solve them after everything else.
     order = bones_parent_first(dst)
     def under_foot(b):
@@ -275,11 +304,11 @@ def retarget(src, dst, clip_name, frames=None, lock_height=False):
             inherited = pose[bone.parent.name] @ bone.parent.matrix_local.inverted() @ rest if bone.parent else rest.copy()
             name = bone.name
             if name in BONE_MAP:
-                src_now = world_rot(src.matrix_world @ sbone(BONE_MAP[name]).matrix)
+                src_now = turn.to_quaternion() @ world_rot(src.matrix_world @ sbone(BONE_MAP[name]).matrix)
                 rot = world_rot(dst_inv) @ (src_now @ src_rest[name].inverted() @ dst_rest[name])
                 if name == 'Body':
                     hips_now = src.matrix_world @ sbone('Hips').head
-                    offset = hips_now - hips_rest
+                    offset = turn @ (hips_now - hips_rest - shift)
                     if lock_height:
                         offset.z = 0
                     pos = rest.translation + dst_inv.to_3x3() @ (offset * root_scale)
@@ -402,6 +431,54 @@ def build_shotgun():
     build_skinned_gun('Shotgun', 'shotgun', SHOTGUN_LENGTH)
 
 
+def build_knife():
+    """The knife: blade forward (+Y in Blender, -Z in the game), edge down,
+    origin in the middle of the handle (where the fist holds it)."""
+    reset()
+    objs = import_fbx(os.path.join(SRC, 'Gun', 'Knife.fbx'))
+    mesh = find(objs, 'MESH')[0]
+    for o in objs:
+        if o is not mesh:
+            bpy.data.objects.remove(o, do_unlink=True)
+    bpy.ops.object.select_all(action='DESELECT')
+    mesh.select_set(True)
+    bpy.context.view_layer.objects.active = mesh
+    bpy.ops.object.transform_apply(location=True, rotation=True, scale=True)
+    # Modelled blade up (+Z), flat across Y: turn the blade forward (+Y) with
+    # its edge down.
+    mesh.data.transform(Matrix.Rotation(math.radians(90), 4, 'Y') @ Matrix.Rotation(math.radians(-90), 4, 'X'))
+    handle = [mesh.data.vertices[i].co for p in mesh.data.polygons if mesh.data.materials[p.material_index].name.startswith('DarkWood')
+              for i in p.vertices]
+    centre = sum(handle, Vector()) / len(handle)
+    ys = [v.co.y for v in mesh.data.vertices]
+    mesh.data.transform(Matrix.Scale(KNIFE_LENGTH / (max(ys) - min(ys)), 4) @ Matrix.Translation(-centre))
+    bake_material_colors([mesh])
+    export_glb(os.path.join(OUT, 'knife.glb'), [mesh], animations=False)
+
+
+def build_medkit():
+    """The heal pack: the Survival Pack's white first-aid case, standing on
+    its base, MEDKIT_WIDTH wide, origin at its middle (like the box it
+    replaced)."""
+    reset()
+    bpy.ops.wm.obj_import(filepath=os.path.join(ROOT, 'map_resource', 'Survival Pack - Sept 2020', 'OBJ', 'FirstAidKit_Hard.obj'))
+    objs = list(bpy.data.objects)
+    meshes = find(objs, 'MESH')
+    bpy.ops.object.select_all(action='DESELECT')
+    for o in meshes:
+        o.select_set(True)
+    bpy.context.view_layer.objects.active = meshes[0]
+    if len(meshes) > 1:
+        bpy.ops.object.join()
+    mesh = bpy.context.view_layer.objects.active
+    bpy.ops.object.transform_apply(location=True, rotation=True, scale=True)
+    lo = Vector(min(v.co[i] for v in mesh.data.vertices) for i in range(3))
+    hi = Vector(max(v.co[i] for v in mesh.data.vertices) for i in range(3))
+    mesh.data.transform(Matrix.Scale(MEDKIT_WIDTH / max(hi - lo), 4) @ Matrix.Translation(-(lo + hi) / 2))
+    bake_material_colors([mesh])
+    export_glb(os.path.join(OUT, 'medkit.glb'), [mesh], animations=False)
+
+
 def build_skinned_gun(source, name, length, turn=Matrix.Identity(4), rename=None):
     """Guns that keep their little skeleton, so the game can move parts (the
     sniper's Magazine and bolt Handle, the pistol's Slide and Magazine).
@@ -477,3 +554,5 @@ if __name__ == '__main__':
     build_revolver()
     build_p90()
     build_shotgun()
+    build_knife()
+    build_medkit()

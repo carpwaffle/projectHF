@@ -52,8 +52,9 @@ function showSkin(index) {
 showSkin(0);
 // For poking at the character from the browser console.
 window.preview = {
-  get character() { return character; }, scene, camera,
+  get character() { return character; }, scene, camera, renderer,
   orbit(yawAngle, pitchAngle, dist = distance) { orbitYaw = yawAngle; orbitPitch = pitchAngle; distance = dist; },
+  paused: false, // (freezes the animation, e.g. mid-swing, for a closer look)
 };
 $('prevSkin').onclick = () => showSkin(skin - 1);
 $('nextSkin').onclick = () => showSkin(skin + 1);
@@ -159,6 +160,10 @@ let last = performance.now();
 let fireTimer = 0;
 function frame(now) {
   requestAnimationFrame(frame);
+  if (window.preview.paused) {
+    last = now;
+    return;
+  }
   const dt = Math.min(0.05, (now - last) / 1000);
   last = now;
 

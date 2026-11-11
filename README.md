@@ -1,6 +1,6 @@
 # Hack FPS
 
-A small browser FPS where any player can click **Host Game** and their own tab
+A small browser FPS where any player can click **Create room** and their own tab
 becomes the server. Other players join with a 5-character room code. There's
 no build step and no game server to deploy. Two teams (Blue and Red), no
 friendly fire; each team spawns in its own base.
@@ -11,10 +11,13 @@ friendly fire; each team spawns in its own base.
 npm start              # or: python3 -m http.server 8080
 ```
 
-Open http://localhost:8080, click **Host Game**, then open a second tab or
-another computer, enter the room code, and click **Join**. Easier: the
+Open http://localhost:8080, open the **Create a room** tab, pick a game mode
+and click **Create room**; then open a second tab or another computer, enter
+the room code under **Join a room** (the tab shown first, unless you last
+created a room) and click **Join**. Easier: the
 host's address bar shows `…/?room=CODE` once the room is up; whoever opens
-that link gets the code filled in and just enters a name and clicks **Join**.
+that link gets the Join tab with the code filled in and just enters a name
+and clicks **Join**.
 Players who close their tab (or crash, or lose their connection) are removed
 within a few seconds.
 
@@ -25,12 +28,24 @@ ES modules don't load from `file://`, so you need a local server. To play
 with friends over the internet, put these static files on any host, such as
 GitHub Pages, Netlify or itch.io.
 
-Controls: WASD move · Space jump · Ctrl or Shift (hold) crouch · Mouse aim · Click shoot · R reload · Q / E fly up / down (fly hack) · Alt aim lock (aim hack) · 1-6 / wheel switch weapon (only for the player named "Admin") · Right mouse scope (sniper) · M mute · Tab scoreboard · Esc release mouse.
+Controls: WASD move · Space jump · Ctrl or Shift (hold) crouch · Mouse aim · Click shoot · R reload · C smoke bomb (then click to throw) · Q / E fly up / down (fly hack) · Alt aim lock (aim hack; the triggerbot fires by itself) · 1-7 / wheel switch weapon (only for the player named "Admin") · Right mouse scope (sniper) · M mute · Tab scoreboard · Esc release mouse.
+
+**Smoke bomb.** Everyone spawns with one. C takes it out (or puts it
+away): you hold it out, and a red line shows where it'll go and a ring where
+it'll pop. A click throws it (an overhand throw, or the running one while
+moving); it bounces, pops 1.5 s later into a 7 m cloud that bursts out in a
+fraction of a second and lasts 8 s, and you're back on your weapon. It's
+ready again 20 s after a throw (the icon above your money and hacks counts down, and
+shakes if you press C too early).
+Smoke blocks sight: the aim hack and triggerbot won't lock onto or fire at
+anyone through it, bots can't see through it, enemy names don't show
+through it, and inside it the view is greyed out. It doesn't stop bullets
+(spray into it blind), the wall hack or the map hack.
 
 **Hacks.** The core of the game: in the same menu you also buy hacks
 (you pay for the weapon and each hack), active until your next death. How
-many at once depends on the room's mode, picked by the host under **Mode**
-before clicking **Host Game** (and shown next to the room code):
+many at once is the host's pick under **Hacks per life** before clicking
+**Create room** (shown next to the room code):
 
 - **Default:** up to 2 hacks per life; once 2 are ticked the rest are
   locked until you untick one.
@@ -40,6 +55,22 @@ before clicking **Host Game** (and shown next to the room code):
 
 Teammates can see each other's hacks on the scoreboard; the other team can't.
 
+**Game modes** (a card each in the Create tab; shown next to the room code
+and in the buy menu):
+
+- **Classic (기본 모드):** every weapon and hack; a team wins the round when
+  one of its players buys the Victory hack ($10,000).
+- **Melee mode (칼전 모드):** knives only: no guns in the buy menu, weapon spots
+  off. Recoil, infinite ammo, rapid-melee, HP, aim and Victory hacks are off.
+- **Headshot mode (헤드샷 모드):** everyone has 1 HP and only headshots hurt
+  (a body shot is stopped by the body, harmlessly). Everyone spawns with the
+  sniper rifle, free; no other guns, weapon spots off. Rapid-melee, wallbang, HP,
+  triggerbot, aim and Victory hacks are off.
+
+In melee and headshot mode the first team to **50 kills** wins the round
+(the score at the top shows `kills / 50`). Admin's weapon switching is off in
+both. Money, heal and money spots, and smoke bombs work as usual.
+
 | Hack | Price | Effect |
 |---|---|---|
 | Map | $300 | Minimap (lower left): every player with their name, every pickup spot and its countdown |
@@ -48,42 +79,47 @@ Teammates can see each other's hacks on the scoreboard; the other team can't.
 | Infinite ammo | $500 | No reloads; shotgun and sniper fire twice as fast |
 | No-clip | $600 | Walk through walls and ceilings (floors and the boundary still hold) |
 | Fly | $700 | Q up, E down, hover otherwise; up to 25 m, inside the boundary; moves 1.3x faster |
+| Rapid melee | $800 | Knife: hold the button to swing 10x as fast (0.06 s between swings instead of 0.6 s; normal damage per swing) |
 | Wall | $900 | See every player through walls: silhouette in their team colour plus hitboxes |
 | HP | $1,000 | 1500 HP (heal packs still heal 100) |
+| Wallbang | $1,100 | Your shots (every gun) and knife go through walls and floors, across the whole map, at full damage. The aim hack and triggerbot still ignore enemies behind walls |
+| Triggerbot | $1,200 | Fires by itself whenever the crosshair is on a visible enemy (the knife: within its reach) |
+| Fake-lag | $1,500 | Invisible to enemies (see-through to you and your team): they see a solid afterimage of you, renewed every second where you are. Attacking removes it and shows you to everyone for 1 s. Enemies' aim hack, triggerbot, wall and map hacks (and bots) go by the afterimage; your real hitbox, footsteps and hit sparks stay where you are |
 | Aim | $2,000 | Hold Alt: the view locks onto the head of the visible enemy nearest the crosshair |
 | Victory | $10,000 | Your team wins the round: 10 s victory screen, then a new round (money, kills and hacks reset) |
 
 **Money.** Everyone starts with $0 (the player named "Admin" with $999,999, for testing) and earns $16 for every second they stay
 alive (paid when they die) and $500 per kill; the scoreboard (Tab) and the
 bottom-left of the HUD show it. On joining and after every death a menu lets
-you pick the weapon to spawn with: the pistol is free, the others cost money
-(revolver $250, P90 / shotgun $400, rifle $500, sniper $650); what you can't
+you pick the weapon to spawn with: the knife is free, the guns cost money
+(pistol $200, revolver $250, P90 / shotgun $400, rifle $500, sniper $650); what you can't
 afford is greyed out. Press Start to spawn (after the 2 s respawn delay).
 
-Other weapons are also picked up in the map: ten spots
-marked with a white circle (House04, House12, the east and west ends of the
-road, four on House08's 5th floor, and the middle of the House01 / House09
-bridges) each
-offer a random weapon (not the pistol). Walk over the circle to take it, with a full magazine; you keep it
-until you pick up a different one or die (back to the pistol). An emptied spot
+Other weapons are also picked up in the map: ten spots marked with a
+white circle (see the map section below) each offer a random weapon (any of
+them, the pistol and the knife too). Walk over the circle to take it, with a full magazine; you keep it
+until you pick up a different one or die (back to the knife). An emptied spot
 shows a countdown and gets a new random weapon after 20 s. (The player named "Admin" can also switch
 freely with the keys below.)
 
-Heal packs (green circles: 4th floor of House05 / House13, the north annex
-of House01 / south annex of House09, two on House08's roof) heal you by 100
-HP when you walk over one while hurt. Money spots (yellow circles, a gold
-coin: the roofs of House03 / House11 and House07 / House15, the latter behind
-a billboard that hides them from House08) give $1,000. Both refill after 20 s,
-with the same countdown.
+Heal packs (green circles) heal you by 100 HP when you walk over one while
+hurt. Money spots (yellow circles, a gold coin) give $1,000. Both refill
+after 20 s, with the same countdown.
 
 | Key | Weapon | Price | Fire | Damage (body / head) | Rounds | Reload |
 |---|---|---|---|---|---|---|
-| 1 | Pistol | free | per click, 0.15 s | 30 / 75 | 12 | 1.6 s |
-| 2 | Revolver | $250 | per click, 0.35 s | 55 / 110 | 6 | 2.4 s |
-| 3 | Rifle | $500 | automatic, 0.15 s | 25 / 50 | 30 | 2.2 s |
-| 4 | P90 | $400 | automatic, 0.075 s | 17 / 34 | 50 | 2.5 s |
-| 5 | Shotgun | $400 | per click, pumped, 0.65 s | 8 pellets × 13 / 20, less with distance | 6 | 2.6 s |
-| 6 | Sniper | $650 | per click, bolt, 1 s; scope | 80 / 200 | 5 | 3 s |
+| 1 | Knife | free | swing (hold to keep swinging), 0.6 s; reach 2 m | 50, from behind 100 | – | – |
+| 2 | Pistol | $200 | per click, 0.15 s | 30 / 75 | 12 | 1.6 s |
+| 3 | Revolver | $250 | per click, 0.35 s | 55 / 110 | 6 | 2.4 s |
+| 4 | Rifle | $500 | automatic, 0.15 s | 25 / 50 | 30 | 2.2 s |
+| 5 | P90 | $400 | automatic, 0.075 s | 17 / 34 | 50 | 2.5 s |
+| 6 | Shotgun | $400 | per click, pumped, 0.65 s | 8 pellets × 13 / 20, less with distance | 6 | 2.6 s |
+| 7 | Sniper | $650 | per click, bolt, 1 s; scope | 80 / 200 | 5 | 3 s |
+
+**Knife** (what everyone spawns with): a slash that hits the nearest enemy
+within 2 m in front of you (about 35° either side of where you look, not
+through walls), 50 damage, 100 from behind (they face away from you). You
+run 25% faster holding it. No ammo, no reload.
 
 Switching takes 0.45 s and cancels a reload. Press R to reload, or it reloads by itself
 when the magazine runs dry. Spare magazines are unlimited. Weapon stats live in
@@ -95,14 +131,15 @@ while moving and most in the air, and half as much crouched; the crosshair
 ticks show how much. Crouching (hold Ctrl or Shift) also halves your speed and
 lowers you (eyes, hitboxes; you fit under 1.25 m, and stand up again once
 there's room). Most
-to least accurate: sniper (a little more so scoped), revolver, pistol and
-rifle, P90, shotgun. After
+to least accurate: sniper scoped, revolver, pistol and rifle, sniper unscoped
+(a little wider than the rifle) and P90, shotgun. After
 spawning you're protected for 3 s (a faint shield), until you fire. A red arc
 round the crosshair points at whoever hit you. Teammates' names show through
 walls; enemies' only when they're in sight.
 
 Players join the team with fewer players. The team score (top centre) is the
-team's total kills.
+team's kills this round (counted by the host; out of 50 in melee and headshot
+mode).
 
 ## Assets
 
@@ -130,50 +167,68 @@ name to `SKINS` in `src/assets.js`. Texture sizes for the kit are set by
 Dev pages: `preview.html` (character animations with every gun, third or first person), `kit.html` (every city kit
 piece with names, plus draw calls, triangles and GPU texture memory).
 
-## The map
+## The map: Clock Tower District
 
-`maps/downtown.blend` is the map's master copy; edit it in Blender. It was
-generated by `tools/map_generator.py` (Downtown City kit pieces) from the
-blueprint `maps/blueprint_base_2.png`, and is now yours to refine. The
-previous layout is kept in `maps/downtown_v1.blend`.
+It follows the blueprint at
+https://claude.ai/artifact/TQAqcKbaK8rvvz1DBCx93G: a 88 x 120 m
+city block, Blue spawning in Central Station (north) and Red in City Hall
+(south), mirrored across the middle, three lanes (Canal, Main Street, Market
+Alley) with a Subway underneath, rooftops above, and the Clock Tower and the
+Crane in the middle. Up in the sky, cover for fly-hack players: in each half
+an ad blimp high over Market Alley's crossroads (~17-22 m, the two turned
+into a V; Blue's says "HACK SOJU" in blue, Red's "HACK COLA" in red) and a
+hot-air balloon in the team's colours by the Canal at Bridge Street (its
+crown at 24 m, just under the 25 m fly ceiling; its basket at ~12 m). They're solid and
+can't be destroyed; their tops and the basket can be stood on. The buildings are simple boxes with tiling textures,
+each landmark in its own colour (white Hospital, grey stone Bank, green
+corrugated Warehouse, ...); props from the asset packs make it lived in:
+parked cars (police cars at the Police Station, taxis at the bases), trees
+and planters, crates, barrels and carts, AC units on the roofs, food on
+the market stalls, and furniture inside (hospital and hotel beds, bank and
+police desks, station couches, a café, warehouse racks). Cars,
+crates, barrels, planters and tree trunks are solid cover (shots pass
+through leaves).
 
-**Editing in Blender**
+- **Callouts:** the HUD shows where you are under the room line
+  ("병원 · 4F", "Hotel · Roof"); the map hack's minimap shows the names too.
+- **Footsteps** on metal (the Warehouse / Factory catwalks, the crane's
+  cab) and climbing a ladder sound metallic.
+- **Ladders:** walk into one to climb (forward goes up, back goes down,
+  sideways shuffles, jump lets go); at the top keep pushing forward to step
+  off. No shooting and no gun while climbing. Ladders: inside the Clock
+  Tower (to its 14 m balcony) and outside it (to the 20 m top), the Crane
+  (12 m to the 18 m cab), the Hospital / Hotel fire ladders (to the roof) and
+  the Warehouse / Factory roof hatches. Bots use them too.
+- Pickups: weapons under the Canal Bridge, in the Subway, Market Hall 2F,
+  Construction 3F, Hospital / Hotel 4F, Bank / Police roof, Warehouse /
+  Factory catwalk; heal packs in the Hospital / Hotel lobby, Subway and Market
+  Hall; money on the Clock Tower top, the Crane cab and the Warehouse /
+  Factory roofs.
 
-| Collection | What it is |
-|---|---|
-| `Buildings` | One Empty per building (plus `Ring`: the outer facades, and `Props`: cover walls, AC units, manholes). Move or rotate it to move the whole building, collision included. Custom properties `floors`, `enterable`. |
-| `Visual` | Everything drawn: kit pieces (linked duplicates), generated stairs/walls, ground, sidewalks. |
-| `Collision` | Simple shapes the game uses for movement and bullets (wireframe in Blender, invisible in game). **If you add, remove or move walls, update these too.** |
-| `Spawns` | Empties named `Spawn_A_XX` / `Spawn_B_XX` with a `team` property (0 = Blue, north base; 1 = Red, south base). Players face the empty's green (local +Y) axis: rotate it about Z to aim it. |
-
-Units are metres; walls are 2 m wide and 3 m per storey. After editing:
+`tools/district_generator.py` writes `maps/district.blend` (everything in
+it: geometry, props, spawns, ladders, pickups, callout zones and metal floors
+as a `map_meta` scene property). It reads the textures and models from the
+asset packs in `map_resource/` (not in git: the Quaternius Downtown City,
+Medieval Village, Modular SciFi and Stylized Nature MegaKits, Realistic Car
+Pack, Platformer Pack, Ultimate Food Pack and Ultimate House Interior Pack,
+all CC0) and saves what it uses to
+`maps/textures/` (in git), so only regenerating needs the packs:
 
 ```sh
-npm run build:map       # bake the lighting (~1.5 min on the GPU), export + optimise → assets/models/map*
+npm run gen:map         # regenerate maps/district.blend from the script
+npm run build:map       # bake the lighting (~4 min on the GPU), export + optimise → assets/models/district*
 npm run build:map:fast  # no bake (dynamic lighting in game), a few seconds: for layout iterations
 npm run build:lightmap  # ~20 s: redo only the brightness settings (LM_*, DARK_*) from the last bake
 ```
 
-The map's lighting is baked into a lightmap (`assets/models/map_lightmap.ktx2`):
-sun + sky with shadows and bounced light, done by Cycles in
-`tools/export_map.py` (settings at the top: sun direction/strength, sky,
-exposure, dark lift, ambient). The game draws the baked map unlit (colour × lightmap),
-which is cheaper than real-time lights; characters still use dynamic lights.
-
-**The look:** the kit's own textures × the baked light. Touching wall
-pieces are welded before the bake, so the light runs across a wall without
-seams, and a baked ambient-occlusion pass (`AO_*`) darkens corners and step
-edges. Generated boxes (parapets, cover walls, billboards, frames, boundary
-blocks) have rounded edges (`BEVEL` in `tools/map_generator.py`). Characters
-are fully matte (Lambert, no highlights) with a faint fuzz at the edges (`softShading` in `src/assets.js`).
-
-Then reload the game. `npm run blueprint` renders `maps/blueprint_base.png`, a
-top-down image of the current map with a 2 m grid, for sketching changes on.
-To regenerate the map from the script (this **discards** your Blender
-edits): `Blender -b --factory-startup --python tools/map_generator.py -- --force`.
-
-A ring of facades closes the arena; the game also keeps players inside the
-48.5 m play radius.
+Props (`district_props.glb`) are lit in real time like the characters; the
+buildings' lighting is baked into a lightmap (`assets/models/district_lightmap.ktx2`):
+sun + sky with shadows, bounced light and ambient occlusion, done by Cycles
+in `tools/export_map.py` (settings at the top). The game draws the baked map
+unlit (colour × lightmap), which is cheaper than real-time lights;
+characters still use dynamic lights. Characters are fully matte (Lambert,
+no highlights) with a faint fuzz at the edges (`softShading` in `src/assets.js`).
+Boundary blocks close the play area; the game also keeps players inside it.
 
 ## How it works
 
@@ -212,11 +267,9 @@ A ring of facades closes the arena; the game also keeps players inside the
 | `tools/optimize_assets.mjs` | Optimisation stage of the asset build (see Assets) |
 | `npm run build:guns` | Rebuild just the weapon models (all six) |
 | `npm run build:anims` | Rebuild the animations (rifle + pistol clips) and the weapons, not the characters |
-| `tools/map_generator.py` | Generates `maps/downtown.blend` from the layout in the script (`-- --force` overwrites) |
+| `tools/district_generator.py` | Generates `maps/district.blend` (geometry, spawns, ladders, pickups, callout zones) from the layout in the script (`npm run gen:map`) |
 | `tools/export_map.py` | Bakes the lighting and exports the `.blend` for the game (`npm run build:map`) |
-| `tools/make_blueprint.py`, `.mjs` | Top-down map image with a grid (`npm run blueprint`) |
-| `maps/downtown.blend` | The map (edit in Blender); `downtown_v1.blend` is the first layout |
-| `maps/blueprint_base.png` | Blueprint of the current map; `blueprint_base_2.png` is the user's drawing the v2 map was built from |
+| `maps/district.blend` | The map |
 | `kit.html`, `src/kit.js` | City kit catalogue / asset check page |
 | `preview.html`, `src/preview.js` | Animation preview page (http://localhost:8080/preview.html) |
 
@@ -231,12 +284,20 @@ A ring of facades closes the arena; the game also keeps players inside the
   snapshots, so they move smoothly.
 - **The host tick** runs from a Web Worker timer, so the game keeps running
   when the host switches tabs.
-- **Bots** (AI players): the host picks "Bots: fill teams to N vs N" in the
-  buy menu (remembered in that browser). Bots fill each team up to that size
+- **Bots** (AI players): the host picks a team size under "Add AI bots", near
+  the top of the buy menu (remembered in that browser). Bots fill each team up to that size
   and leave as people join. They're named `[BOT] …`, run on the host only
   (about 0.05 ms per bot per tick; nothing extra for other players), buy
-  weapons with their money but never hacks, and can't reach the billboard
-  roofs (House07/15). The first time, the host builds a navigation graph from
+  weapons with their money, and climb ladders like everyone else. With
+  "Bots use hacks" ticked (next to the team size; on by default, remembered)
+  they also buy up to the room's hack limit (3 with no limit) with what's
+  left, suited to their weapon: HP, wall, map, speed, recoil, infinite ammo,
+  rapid melee, wallbang, triggerbot, aim and fake-lag; never fly, no-clip or
+  victory. The wall hack sees everyone in range through smoke (and through
+  walls with wallbang too; without it, it hunts them, like the map hack), the
+  aim hack is a weaker lock (head, 30% of the usual aim error, settling
+  fast), the triggerbot reacts in about 0.1 s. Unticking it takes the bots'
+  hacks away at once. The first time, the host builds a navigation graph from
   the map's collision in a background worker (about 2 s).
 
 ## Known limitations / next steps

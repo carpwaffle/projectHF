@@ -21,8 +21,8 @@ export const MOVE_SPEED = 5.5;
 export const JUMP_SPEED = 7;
 export const GRAVITY = 20;
 
-// Two teams: team 0 spawns in the north base (House01), team 1 in the south
-// base (House09). No friendly fire.
+// Two teams: team 0 spawns in the north base (Central Station), team 1 in the south
+// base (City Hall). No friendly fire.
 export const TEAMS = [
   { name: 'Blue', color: '#4c8dff' },
   { name: 'Red', color: '#ff5a4c' },
@@ -37,9 +37,8 @@ export const PLAYER_TIMEOUT = 6;
 export const HOST_TIMEOUT = 8;
 export const SPAWN_PROTECTION = 3; // seconds of invulnerability after spawning (ends early when you fire)
 
-// Weapons (index = the number sent over the network, and key 1-6). Every
-// player carries all of them; switch with the number keys, Q (last weapon)
-// or the mouse wheel. Everyone spawns with DEFAULT_WEAPON.
+// Weapons (index = the number sent over the network, and key 1-7). Everyone
+// spawns with DEFAULT_WEAPON (the knife) or one bought in the buy menu.
 //   cooldown: seconds between shots (incl. working a bolt / pump)
 //   auto: keeps firing while the trigger is held (otherwise one shot per click)
 //   price: what it costs to spawn with it (dollars)
@@ -49,10 +48,21 @@ export const SPAWN_PROTECTION = 3; // seconds of invulnerability after spawning 
 //   pellets: shots per trigger pull (shotgun), each in a cone of pelletSpread
 //     around the aimed (spread) direction, each doing damage / headDamage,
 //     falling off between falloff[0] and [1] metres to falloff[2] of it
+//   melee: a swing that hits a player within `range` metres in front (no
+//     ammo); backDamage from behind. moveSpeed: movement speed multiplier
+//     while holding it.
 export const WEAPONS = [
   {
-    id: 'pistol', name: 'Pistol', damage: 30, headDamage: 75, cooldown: 0.15, auto: false,
+    id: 'knife', name: 'Knife', damage: 50, headDamage: 50, cooldown: 0.6, auto: true,
     price: 0,
+    magSize: 0, reloadTime: 0,
+    melee: { range: 1.6, backDamage: 100 },
+    moveSpeed: 1.25,
+    spread: { still: 0, move: 0, air: 0 },
+  },
+  {
+    id: 'pistol', name: 'Pistol', damage: 30, headDamage: 75, cooldown: 0.15, auto: false,
+    price: 200,
     magSize: 12, reloadTime: 1.6,
     spread: { still: 0.01, move: 0.03, air: 0.07 }, // (same as the rifle)
   },
@@ -85,12 +95,12 @@ export const WEAPONS = [
     id: 'sniper', name: 'Sniper', damage: 80, headDamage: 200, cooldown: 1.0, auto: false,
     price: 650,
     magSize: 5, reloadTime: 3.0,
-    spread: { still: 0.001, move: 0.015, air: 0.04 }, // the most accurate, even unscoped
-    scoped: { still: 0, move: 0.008, air: 0.04 },
+    spread: { still: 0.015, move: 0.04, air: 0.08 }, // unscoped: a little wider than the rifle...
+    scoped: { still: 0, move: 0.008, air: 0.04 }, // ... scoped: the most accurate
     zoomFov: 18, scopeTime: 0.22,
   },
 ];
-export const DEFAULT_WEAPON = WEAPONS.findIndex((w) => w.id === 'pistol'); // what everyone spawns with
+export const DEFAULT_WEAPON = WEAPONS.findIndex((w) => w.id === 'knife'); // what everyone spawns with
 export const weaponIndex = (id) => WEAPONS.findIndex((w) => w.id === id);
 
 // Money: earned on every death (SURVIVAL_RATE per second alive) and kill
@@ -112,8 +122,12 @@ export const HACKS = [
   { id: 'ammo', name: 'Infinite ammo hack', price: 500, desc: 'No reloads; faster shotgun and sniper' },
   { id: 'noclip', name: 'No-clip hack', price: 600, desc: 'Walk through walls and ceilings' },
   { id: 'fly', name: 'Fly hack', price: 700, desc: 'Q up, E down (up to 25 m); a bit faster' },
+  { id: 'melee', name: 'Rapid-melee hack', price: 800, desc: 'Knife: hold the button to swing 10x as fast' },
   { id: 'wall', name: 'Wall hack', price: 900, desc: 'See players and hitboxes through walls' },
   { id: 'hp', name: 'HP hack', price: 1000, desc: '1500 HP' },
+  { id: 'wallbang', name: 'Wallbang hack', price: 1100, desc: 'Your shots and knife go through walls and floors, at full damage' },
+  { id: 'trigger', name: 'Triggerbot', price: 1200, desc: 'Fires by itself when the crosshair is on an enemy' },
+  { id: 'fakelag', name: 'Fake-lag hack', price: 1500, desc: 'Invisible to enemies, who see an afterimage instead (renewed every second; hacks lock onto it). Attacking reveals you for 1 s' },
   { id: 'aim', name: 'Aim hack', price: 2000, desc: 'Hold Alt: lock onto a visible head' },
   { id: 'victory', name: 'Victory hack', price: 10000, desc: 'Your team wins the round' },
 ];
@@ -126,12 +140,84 @@ export const withinHackLimit = (mask, limit) => !limit || hackCount(mask) <= lim
 export const hasHack = (mask, id) => (mask & hackBit(id)) !== 0;
 export const hackList = (mask) => HACKS.filter((_, i) => mask & (1 << i));
 export const hacksPrice = (mask) => hackList(mask).reduce((sum, h) => sum + h.price, 0);
+
+// Game modes: the host picks one when creating the room (sent in 'welcome').
+//   weapons: the only weapons (ids), free; null: all of them, bought or
+//     picked up. With a list, weapon spots are off (and so is switching).
+//   hacksOff: hacks that can't be bought
+//   killTarget: the first team to this many kills wins the round (0: none;
+//     the victory hack ends it)
+//   headshotOnly: only headshots do damage; hp: everyone's max HP
+export const MODES = {
+  normal: { weapons: null, hacksOff: [], killTarget: 0 },
+  melee: { weapons: ['knife'], hacksOff: ['recoil', 'ammo', 'melee', 'hp', 'aim', 'victory'], killTarget: 50 },
+  headshot: { weapons: ['sniper'], hacksOff: ['melee', 'wallbang', 'hp', 'trigger', 'aim', 'victory'], killTarget: 50, headshotOnly: true, hp: 1 },
+};
+export const modeOf = (id) => MODES[id] ?? MODES.normal;
+export const weaponAllowed = (mode, index) => !!WEAPONS[index] && (!mode.weapons || mode.weapons.includes(WEAPONS[index].id));
+export const weaponPrice = (mode, index) => (mode.weapons ? 0 : WEAPONS[index].price);
+export const startWeapon = (mode) => (mode.weapons ? weaponIndex(mode.weapons[0]) : DEFAULT_WEAPON);
+export const hacksOffMask = (mode) => mode.hacksOff.reduce((mask, id) => mask | hackBit(id), 0);
 export const SPEED_HACK = 3.0; // movement speed multiplier
 export const SPEED_HACK_JUMP = 2.5; // jump height multiplier (1.2 m -> 3.1 m)
 export const FLY_HACK_SPEED = 1.3; // ... while flying with the fly hack (without the speed hack)
 export const RECOIL_HACK = 0.15; // spread multiplier (85% less)
+// Smoke bomb: everyone spawns with one; C takes it out (or puts it away),
+// a click throws it; usable again SMOKE.cooldown seconds after a throw. It
+// flies (bouncing) and pops after SMOKE.fuse seconds into a cloud of
+// SMOKE.radius for SMOKE.duration seconds, which blocks sight (the aim hack,
+// triggerbot, bots, enemy names), not bullets or the wall / map hacks.
+export const SMOKE = {
+  cooldown: 20, fuse: 1.5, radius: 7, duration: 8,
+  grow: 0.3, // s the cloud takes to burst out to full size
+  fadeOut: 0.6, // s it fades away at the end (blocking at full size until it's gone)
+  rise: 1.2, // m the cloud's centre sits above where the bomb came to rest
+  speed: 18, up: 2.5, // m/s the throw (along the view, plus up)
+  size: 0.06, // m (the bomb's radius, for bouncing)
+  bounce: 0.4, friction: 0.6, // velocity kept off a surface: across it, along it
+};
+export const THROW_TIME = 0.7; // s the throw takes
+export const THROW_RELEASE = 0.63; // ... the bomb leaves the hand this far into it
+
+// How big a smoke cloud is `age` seconds after it popped (0: gone or not
+// yet): bursting out, then full size until it's gone (it only looks thinner
+// at the end: while fading it still blocks, or the triggerbot fired through
+// a cloud that still looked solid).
+export function smokeRadius(age, duration = SMOKE.duration) {
+  if (age < 0 || age >= duration) return 0;
+  return SMOKE.radius * Math.min(1, age / SMOKE.grow);
+}
+export const smokeCentre = (pos) => [pos[0], pos[1] + SMOKE.rise, pos[2]];
+
+// Does a line of sight from a to b pass through a smoke cloud? smokes:
+// [{ pos, at, duration }] (at: when it popped), now: on the same clock.
+export function smokeBlocks(smokes, a, b, now) {
+  for (const s of smokes) {
+    const r = smokeRadius(now - s.at, s.duration);
+    if (r > 0 && segmentNearPoint(a, b, smokeCentre(s.pos)) < r) return true;
+  }
+  return false;
+}
+// Distance from point c to the segment a-b.
+function segmentNearPoint(a, b, c) {
+  const ab = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+  const len2 = ab[0] ** 2 + ab[1] ** 2 + ab[2] ** 2;
+  const t = len2 > 0 ? Math.max(0, Math.min(1, ((c[0] - a[0]) * ab[0] + (c[1] - a[1]) * ab[1] + (c[2] - a[2]) * ab[2]) / len2)) : 0;
+  return Math.hypot(a[0] + ab[0] * t - c[0], a[1] + ab[1] * t - c[1], a[2] + ab[2] * t - c[2]);
+}
+
+// Fake-lag hack: invisible to enemies (half see-through to us and our
+// team); they see an afterimage of us instead, renewed every
+// FAKE_LAG_GHOST seconds where we are then. Attacking removes it and shows
+// us to everyone for FAKE_LAG_REVEAL seconds. The aim hack, triggerbot, wall
+// and map hacks (and bots) go by the afterimage; the real hitbox, sounds and
+// hit sparks stay where we are.
+export const FAKE_LAG_GHOST = 1;
+export const FAKE_LAG_REVEAL = 1;
+export const RAPID_MELEE = 0.1; // the knife's cooldown multiplier with the rapid-melee hack (0.6 s -> 0.06 s)
 export const FLY_SPEED = 6; // m/s up / down with the fly hack
-export const FLY_MAX_Y = 25; // fly ceiling (House08's roof is at 15 m)
+export const FLY_MAX_Y = 25; // fly ceiling (the Clock Tower's top is at 20 m)
+export const CLIMB_SPEED = 3.5; // m/s up or down a ladder
 export const HACK_HP = 1500; // max HP with the HP hack
 export const HEAL_AMOUNT = 100; // a heal pack heals this much (up to max HP)
 export const FAST_CYCLE = 0.5; // infinite ammo: shotgun pump / sniper bolt time multiplier
@@ -139,6 +225,7 @@ export const VICTORY_SCREEN = 10; // seconds the winning team is shown before th
 
 // Seconds between shots for a weapon, with the player's hacks (mask).
 export function fireCooldown(weapon, hacks) {
+  if (weapon.melee && hasHack(hacks, 'melee')) return weapon.cooldown * RAPID_MELEE;
   const fast = hasHack(hacks, 'ammo') && (weapon.id === 'shotgun' || weapon.id === 'sniper');
   return weapon.cooldown * (fast ? FAST_CYCLE : 1);
 }
@@ -148,45 +235,32 @@ export function fireCooldown(weapon, hacks) {
 export const ADMIN_NAME = 'Admin';
 export const ADMIN_MONEY = 999999; // (testing) what Admin starts every round with
 
-// Weapon pickups: spots (game coordinates: x, floor height, z) marked with a
-// white circle. Walking over one holding a different weapon takes it (full
+// Pickup spots (game coordinates: x, floor height, z), listed in the map's
+// meta file (tools/district_generator.py). Weapon spots, marked with a white
+// circle: walking over one holding a different weapon takes it (full
 // magazine) until you die or take another; the spot then stays empty for
-// PICKUP_RESPAWN seconds and gets a new random weapon (not the spawn pistol).
-export const PICKUP_SPOTS = [
-  [-19, 0.15, -40.41], // House04
-  [19, 0.15, 40.41], // House12
-  [45, 0, 0], // east end of the road
-  [-45, 0, 0], // west end of the road
-  [4.5, 12.15, 3.5], [-4.5, 12.15, -3.5], [3.5, 12.15, -4.5], [-3.5, 12.15, 4.5], // House08, 5th floor
-  [0, 3.15, -28], [0, 3.15, 28], // middle of the House01 / House09 bridges
-];
-// Heal packs, marked with a green circle: walking over one while hurt heals
-// to full; the spot then refills after HEAL_RESPAWN seconds.
-export const HEAL_SPOTS = [
-  [-34.59, 9.15, -20.59], [34.59, 9.15, 20.59], // House05 / House13, 4th floor
-  [17, 0.15, -37], [-17, 0.15, 37], // House01's north annex / House09's south annex (ground floor)
-  [4.5, 15.15, 0], [-4.5, 15.15, 0], // House08 roof
-];
+// PICKUP_RESPAWN seconds and gets a new random weapon (any, the knife too).
+// Heal packs (green circle): walking over one while hurt heals HEAL_AMOUNT;
+// the spot refills after HEAL_RESPAWN seconds. Money spots (yellow circle):
+// MONEY_AMOUNT, refilled after MONEY_RESPAWN seconds.
 export const HEAL_RESPAWN = 20; // seconds
-// Money spots, marked with a yellow circle: walking over one gives
-// MONEY_AMOUNT; the spot then refills after MONEY_RESPAWN seconds.
-export const MONEY_SPOTS = [
-  [38, 3.16, -16], [-38, 3.16, 16], // House03 / House11 roofs
-  [-17, 6.16, -17], [17, 6.16, 17], // House07 / House15 roofs (behind the billboards)
-];
 export const MONEY_AMOUNT = 1000;
 export const MONEY_RESPAWN = 20; // seconds
 
 // All pickup spots in one list, in the order the host and clients share
 // (weapon spots, heal spots, money spots): [{ pos, kind }].
-export const ALL_SPOTS = [
-  ...PICKUP_SPOTS.map((pos) => ({ pos, kind: 'weapon' })),
-  ...HEAL_SPOTS.map((pos) => ({ pos, kind: 'heal' })),
-  ...MONEY_SPOTS.map((pos) => ({ pos, kind: 'money' })),
-];
+export let ALL_SPOTS = [];
+// Call once the map's meta is loaded, before the host or renderer use the spots.
+export function useMapSpots({ pickups: { weapon, heal, money } }) {
+  ALL_SPOTS = [
+    ...weapon.map((pos) => ({ pos, kind: 'weapon' })),
+    ...heal.map((pos) => ({ pos, kind: 'heal' })),
+    ...money.map((pos) => ({ pos, kind: 'money' })),
+  ];
+}
 export const PICKUP_RADIUS = 1.0; // the circle's (outer) radius
 export const PICKUP_RESPAWN = 20; // seconds
-export const PICKUP_WEAPONS = WEAPONS.map((_, i) => i).filter((i) => i !== DEFAULT_WEAPON);
+export const PICKUP_WEAPONS = WEAPONS.map((_, i) => i); // (the knife too: to swap a gun for it)
 export const randomPickupWeapon = () => PICKUP_WEAPONS[Math.floor(Math.random() * PICKUP_WEAPONS.length)];
 
 // Damage of one shot / pellet at `distance` metres.
@@ -271,10 +345,15 @@ const FEMALE_SKIN = 4; // skins from here on are the female model (assets.js SKI
 const FEMALE_SCALE = 0.955; // ... about this size of the male one
 const PISTOL_HOLD = new Set(['pistol', 'revolver']); // held up in both hands (the others: at the shoulder)
 // Per holding style: the head's sideways offset, and its shift when moving
-// at full speed in each direction ([right, up, forward]).
+// at full speed in each direction ([right, up, forward]). The knife (the
+// boxing guard: upright, the head over the feet, a little left) has its own
+// arc too: arm, tilt, follow and pivot ([up, forward]) as for crouching
+// (fitted within ~2.5 cm; with the rifle's numbers its box sat ~17 cm right
+// of and in front of the head).
 const HEAD_STYLE = {
   rifle: { side: 0.14, fwd: [-0.06, -0.08, 0.15], back: [-0.07, -0.02, -0.15], left: [-0.12, -0.01, -0.02], right: [0.17, -0.08, -0.08] },
   pistol: { side: 0, fwd: [0.02, -0.03, 0.11], back: [0.07, -0.06, 0.14], left: [0, -0.08, 0.08], right: [0.01, -0.08, 0.02] },
+  knife: { arm: 0.53, tilt: 0.06, follow: 0.66, side: -0.06, pivot: [1.066, -0.029], fwd: [0.01, -0.03, 0.07], back: [0, -0.01, 0.1], left: [0.01, 0.02, 0.11], right: [-0.02, -0.01, 0.08] },
 };
 // Crouched, per holding style: arm, tilt and follow as above, the pivot
 // ([up, forward]; lower kneeling when still, higher crouch-walking); leans
@@ -282,12 +361,14 @@ const HEAD_STYLE = {
 const CROUCH_STYLE = {
   rifle: { arm: 0.6, tilt: 0.3, follow: 0.57, side: 0.14, pivot: [0.62, 0.04], fwd: [0.02, 0.21, 0.09], back: [0.02, 0.2, 0.09], left: [0.03, 0.22, 0.06], right: [0.02, 0.22, 0.06] },
   pistol: { arm: 0.61, tilt: 0.3, follow: 0.58, side: -0.02, pivot: [0.63, 0.04], fwd: [0.02, 0.21, 0.09], back: [0.02, 0.21, 0.09], left: [0.03, 0.22, 0.06], right: [0.02, 0.22, 0.06] },
+  knife: { arm: 0.64, tilt: 0.1, follow: 0.55, side: -0.06, pivot: [0.588, 0.019], fwd: [-0.01, 0.22, -0.01], back: [0.02, 0.22, -0.03], left: [-0.04, 0.23, 0.01], right: [-0.05, 0.22, 0.01] },
 };
 // [right, up, forward] of the head in the player's frame: standing or crouched.
 function headOffset(pose, sin, cos, crouched) {
-  const style = (crouched ? CROUCH_STYLE : HEAD_STYLE)[PISTOL_HOLD.has(WEAPONS[pose.weapon]?.id) ? 'pistol' : 'rifle'];
-  const { arm, tilt, follow } = crouched ? style : { arm: HEAD_ARM, tilt: HEAD_TILT, follow: HEAD_PITCH_FOLLOW };
-  const [pivotUp, pivotForward] = crouched ? style.pivot : [HEAD_PIVOT[1], HEAD_PIVOT[0]];
+  const id = WEAPONS[pose.weapon]?.id;
+  const style = (crouched ? CROUCH_STYLE : HEAD_STYLE)[id === 'knife' ? 'knife' : PISTOL_HOLD.has(id) ? 'pistol' : 'rifle'];
+  const { arm, tilt, follow } = style.arm ? style : { arm: HEAD_ARM, tilt: HEAD_TILT, follow: HEAD_PITCH_FOLLOW };
+  const [pivotUp, pivotForward] = style.pivot ?? [HEAD_PIVOT[1], HEAD_PIVOT[0]];
   const angle = tilt - follow * (pose.pitch ?? 0);
   const o = [style.side, pivotUp + arm * Math.cos(angle), pivotForward + arm * Math.sin(angle)];
   if (pose.vel) {

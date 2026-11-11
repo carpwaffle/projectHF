@@ -20,29 +20,45 @@
   <canvas id="view"></canvas>
 
   <div id="menu" class="overlay">
-    <div class="panel">
+    <div class="panel menuPanel">
       <h1>HACK FPS</h1>
       <div id="langSwitch" role="group" aria-label="Language"></div>
       <label><span data-i18n="menu.name">Name</span> <input id="name" maxlength="16" placeholder="Player" data-i18n-placeholder="menu.namePlaceholder" /></label>
-      <label><span data-i18n="menu.mode">Mode (when hosting)</span>
-        <select id="hackMode">
-          <option value="limit">Default: up to 2 hacks per life</option>
-          <option value="any" data-i18n="mode.any">No limit: any number of hacks</option>
-        </select>
-      </label>
-      <button id="hostBtn" data-i18n="menu.host">Host Game</button>
-      <div class="row">
-        <input id="codeInput" maxlength="5" placeholder="ROOM CODE" data-i18n-placeholder="menu.codePlaceholder" />
-        <button id="joinBtn" data-i18n="menu.join">Join</button>
+      <!-- Two tabs, so a friend with a code doesn't make a room by mistake. -->
+      <div id="menuTabs" role="tablist">
+        <button type="button" role="tab" data-tab="join"><span class="tabIcon">🔑</span> <span data-i18n="menu.tabJoin">Join a room</span></button>
+        <button type="button" role="tab" data-tab="host"><span class="tabIcon">➕</span> <span data-i18n="menu.tabHost">Create a room</span></button>
       </div>
+      <section id="joinTab" class="menuTab">
+        <p class="hint" data-i18n="menu.joinHint">Got a room code or link from a friend? Enter the code here.</p>
+        <div class="row">
+          <input id="codeInput" maxlength="5" placeholder="ROOM CODE" data-i18n-placeholder="menu.codePlaceholder" autocomplete="off" />
+          <button id="joinBtn" data-i18n="menu.join">Join</button>
+        </div>
+      </section>
+      <section id="hostTab" class="menuTab" hidden>
+        <p class="hint" data-i18n="menu.hostHint">Start a new room and share its link with friends.</p>
+        <div class="menuSub" data-i18n="menu.gameMode">Game mode</div>
+        <div id="modeCards" role="radiogroup"></div>
+        <div class="menuSub" data-i18n="menu.hackLimit">Hacks per life</div>
+        <div id="hackLimitPick" role="radiogroup">
+          <button type="button" role="radio" data-limit="limit"></button>
+          <button type="button" role="radio" data-limit="any"></button>
+        </div>
+        <button id="hostBtn" data-i18n="menu.host">Create room</button>
+      </section>
       <p id="status"></p>
     </div>
   </div>
 
   <div id="hud" hidden>
+    <div id="smokeView"></div>
     <div id="crosshair"></div>
     <div id="crosshairTicks"><i></i><i></i><i></i><i></i></div>
-    <div id="hitmarker"></div>
+    <div id="hitmarker">
+      <svg class="x" viewBox="-12 -12 24 24"><path d="M-9.2 -11.2L-11.2 -9.2L-3.2 -3.2ZM9.2 -11.2L11.2 -9.2L3.2 -3.2ZM-9.2 11.2L-11.2 9.2L-3.2 3.2ZM9.2 11.2L11.2 9.2L3.2 3.2Z" /></svg>
+      <svg class="skull" viewBox="0 0 24 24"><path fill-rule="evenodd" d="M12 2C6.6 2 3 5.9 3 10.6c0 3 1.4 5.1 3.4 6.3V20a1.2 1.2 0 0 0 1.2 1.2h8.8a1.2 1.2 0 0 0 1.2-1.2v-3.1c2-1.2 3.4-3.3 3.4-6.3C21 5.9 17.4 2 12 2ZM6.4 11.3a2.3 2.3 0 1 0 4.6 0a2.3 2.3 0 1 0-4.6 0ZM13 11.3a2.3 2.3 0 1 0 4.6 0a2.3 2.3 0 1 0-4.6 0ZM12 13.9l-1.2 2.2h2.4ZM9.5 18.2h1.1v3h-1.1ZM13.4 18.2h1.1v3h-1.1Z" /></svg>
+    </div>
     <div id="damageDirs"></div>
     <div id="killConfirm"></div>
     <div id="protectMsg" hidden></div>
@@ -53,14 +69,20 @@
     <div id="teamScore"></div>
     <div id="killfeed"></div>
     <div id="hp">200</div>
-    <div id="scope" hidden></div>
+    <div id="scope" hidden><i class="ring"></i></div>
     <div id="weaponName"></div>
+    <div id="smokeIcon" hidden>
+      <svg viewBox="0 0 24 24"><rect x="7.5" y="7" width="9" height="14" rx="2.2" /><rect x="9.5" y="3.5" width="5" height="3.2" rx="1" /><path d="M14.5 5.1h3.2a1.6 1.6 0 0 1 0 3.2h-1" fill="none" stroke-width="1.4" /><rect x="7.5" y="11" width="9" height="1.6" class="band" /></svg>
+      <span class="key">C</span>
+      <span class="cd"></span>
+    </div>
     <div id="ammo"><span id="ammoCount">30</span> / <span id="magSize">30</span></div>
     <div id="reloadMsg" hidden data-i18n="hud.reloading">Reloading…</div>
     <div id="deadMsg" hidden></div>
     <div id="clickToPlay" data-i18n="hud.clickToPlay">Click to play</div>
     <div id="money">$0</div>
     <div id="hackName"></div>
+    <div id="location"></div>
     <canvas id="minimap" width="600" height="600" hidden></canvas>
     <div id="victory" hidden></div>
     <table id="scoreboard" hidden></table>
@@ -72,17 +94,20 @@
       <h2 id="buyTitle" data-i18n="buy.title">Choose your loadout</h2>
       <p id="buyInfo"></p>
       <div id="buyMoney"></div>
+      <!-- Host only: bots fill each team up to the picked size. -->
+      <div id="botRow" hidden>
+        <div class="botHead"><span class="botIcon">🤖</span> <span data-i18n="buy.bots">Add AI bots</span></div>
+        <div id="botFill" role="radiogroup">
+          <button type="button" data-n="0" data-i18n="buy.botsOff">Off</button><button type="button" data-n="1">1 vs 1</button><button type="button" data-n="2">2 vs 2</button><button type="button" data-n="3">3 vs 3</button><button type="button" data-n="4">4 vs 4</button>
+        </div>
+        <label id="botHacksRow"><input type="checkbox" id="botHacks" checked> <span data-i18n="buy.botHacks">Bots use hacks</span></label>
+        <small data-i18n="buy.botsHint">Bots join until each team has this many players</small>
+      </div>
       <div class="buyCols">
         <div><h3 data-i18n="buy.weapon">Weapon</h3><div id="buyList" role="radiogroup"></div></div>
         <div><h3><span data-i18n="buy.hacks">Hacks</span> <small id="buyHacksMode">(up to 2)</small></h3><div id="buyHacks" role="group"></div></div>
       </div>
       <div id="buyTotal"></div>
-      <label id="botRow" hidden><span data-i18n="buy.bots">Bots (AI players): fill teams to</span>
-        <select id="botFill">
-          <option value="0" data-i18n="buy.botsOff">Off</option><option value="1">1 vs 1</option><option value="2">2 vs 2</option>
-          <option value="3">3 vs 3</option><option value="4">4 vs 4</option>
-        </select>
-      </label>
       <button id="buyStart">Start</button>
       <p class="help" data-i18n="help">WASD move · Space jump · Ctrl / Shift crouch · Mouse aim · Click shoot · R reload · M mute · Tab scores · Esc release mouse</p>
     </div>

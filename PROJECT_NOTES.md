@@ -2006,3 +2006,565 @@ body), with the preview's pose.
   status line and a "room not found" error in both languages; switching
   language re-translates the menu and its status line; the choice survives
   a reload.
+
+## 58. Clock Tower District grey box; ladders; callouts (2026-11-06)
+
+Tester feedback: buildings you can name, and real sniping spots. Blueprint
+(published page): https://claude.ai/artifact/TQAqcKbaK8rvvz1DBCx93G. Built
+as a grey box first, as a second map next to Downtown.
+
+### Map
+
+- `tools/district_generator.py` (Blender, no kit pieces): boxes written in
+  game coordinates (converted to Blender's), one mesh per landmark colour
+  over a generated 1 m grid texture (`maps/district_grid.png`; colour as the
+  glTF base colour factor through a Mix/Multiply node). North half recorded
+  and replayed mirrored (z -> -z) with the south twins' colours
+  (`Recorder` / `mirror_call`); the centre row is built symmetric. Helpers:
+  `shell` (walls with door / window openings), `slab` (with holes), `flight`
+  (steps drawn, a ramp wedge for collision), `rail` (players-only),
+  `ladder`, `zone`, `pickup`, `spawn`. Convex solids' faces are wound
+  outwards (`orient`): three.js draws front faces only and the bots'
+  navigation reads floor normals.
+- 23 draw calls, 18k triangles, ~380 KB (+ collision 27 KB).
+- `export_map.py --name district` / `optimize_assets.mjs --name district`:
+  every output named `district_*` (Downtown keeps `map*`); the scene's
+  `map_meta` JSON (playBounds, pickups, ladders, zones) is merged into
+  `district_meta.json`.
+- Stair rule as before (free cell before the bottom, 1 m flat at the top);
+  switchback stairwells alternate two lanes per storey with a hole in each
+  floor over the flight below it.
+
+### Game
+
+- Maps: `shared.js MAPS` (id -> file prefix). `?map=` or the menu's Map
+  select (saved as `hackfps.map`) picks the page's map; changing it reloads.
+  The host's `welcome` carries `map`; a joiner on another map reloads with
+  it (`sessionStorage hackfps.rejoin`) and joins again by itself.
+- Per-map pickups: `ALL_SPOTS` is now set from the meta (`useMapSpots`)
+  before the host or renderer use it; Downtown keeps its constants.
+- Rectangular play area (`playBounds`): `World.clampXZ` / `inside` / `extent`
+  used by movement, the host's clamp (now down to -6 m: the subway is at
+  -4.5), the bots' nav grid and the minimap. The horizon's outer ground is a
+  plane with a rectangular hole (a ring would cover the canal) and the
+  skyline rings move out past the corners. `renderer.setMap` now builds the
+  pickup spots and the horizon (they need the map).
+- Callouts: `meta.zones` ({ id, rect, y?, floor?, roof? }); `World.zoneAt`
+  picks height-limited zones first, then the smallest. HUD `#location`
+  shows the name (+ "4F" / "Roof"); minimap draws the names faintly.
+  Names in `i18n.js` (`zone.*`).
+
+### Ladders
+
+- `meta.ladders`: { p (on its plane), n (towards the climber), w, y0, y1 }.
+  In front of one (`LADDER_REACH`), `stepPlayer` climbs instead of walking:
+  moving towards it = up (`CLIMB_SPEED` 3.5 m/s, x speed hack), away = down,
+  sideways shuffles; no gravity; held `LADDER_STANDOFF` off the plane
+  unless pushing in (coming down from a roof, the edge at the top was
+  otherwise stepped back up onto); at the top, pushing in steps onto the
+  floor; at the foot climbing down ends (counts as standing); jump lets go
+  (not re-grabbed for 0.4 s). Free-standing ladders (tower inside, roof
+  hatches) have a players-only backing plate.
+- `me.climbing` -> state `l` -> snapshots `l`; no shooting, no first-person
+  gun. Others: the `climb` clip (Mixamo "Climbing Ladder", added to
+  `convert_assets.py` CLIPS; `CENTERED`: its hips sat ~1 m to the side and
+  0.8 m up, moved to the rest position on average), speed following the
+  vertical speed (backwards going down); the gun hidden; the body turned to
+  face the ladder (main.js, from `world.ladderAt`).
+- Bots: nav edges both ways between each ladder's foot and top node
+  (`nav.ladder` marks them); `followPath` doesn't treat the top as "fell
+  off the path" while climbing; no stuck-jump while climbing.
+
+### Verified
+
+- Scripted movement in Chrome: every ladder up (tower inside 0 -> 14 and
+  outside 14 -> 20, crane 6 -> 18, Hospital / Hotel 0 -> 15, Warehouse /
+  Factory 4.5 -> 9.25) and down, walking away at the foot, hanging,
+  climbing back up. The crane's mast top first blocked the cab (raised
+  above head height).
+- Bots' navigation graph (2.4 s to build): Hospital / Hotel roof and 4F,
+  Bank / Police roof, tower balcony and top, crane cab, Construction 3F,
+  Warehouse catwalk and roof, Factory roof, Subway, canal bed, Market Hall
+  2F, skybridge and the Red spawn all reachable from the Blue spawn.
+- Screenshots: overview, the Hospital-roof view down the Canal, the climb
+  animation on the Hospital ladder; HUD location (e.g. "병원 · 옥상").
+
+## 59. Downtown removed (2026-11-06)
+
+The Clock Tower District is the only map. Removed: `maps/downtown*.blend`,
+the blueprint images and `tools/map_generator.py` / `make_blueprint.*`,
+`assets/models/map*`, Downtown's pickup constants, the menu's map select and
+the reload-to-the-host's-map code, and the round play area (`playRadius`;
+`playBounds` only). `npm run gen:map` / `build:map` / `build:map:fast` /
+`build:lightmap` now work on `maps/district.blend` (files stay
+`district_*`). The Downtown City kit (`fbx/Map/DowntownCity`, `city_kit.glb`,
+kit.html) stays: textures for the next phase.
+
+## 60. Textures, props, ladder models, metal footsteps (2026-11-06)
+
+- Textures: each map material is (texture, metres per tile, sRGB tint)
+  (`SURFACES`): asphalt, concrete, marble and red brick from the Downtown
+  kit, the Medieval kit's stone blocks and plaster made greyscale (evened
+  to a light grey) so tints give each landmark its colour, a generated
+  corrugated metal (Warehouse) and the grid (Subway tiles). Made once from
+  `map_resource/` into `maps/textures/` at 1024 px.
+- Props (`PROPS`, `prop()`, mirrored like the rest: the twin turned
+  180 - rot so its front mirrors): cars (Realistic Car Pack; police cars
+  only at the Police Station, other cars at the Bank), trees, bushes in
+  planters, bollards, crates, barrels, carts, AC units. Imported once into
+  hidden library objects (`load_prop`: joined, world space, lifted onto the
+  floor), placed as linked copies. Collision: a box round each (oriented
+  with it); trees only their trunk (bullets pass the leaves); bushes none.
+- Prop textures: only base colour (the map is drawn unlit with baked
+  light), at most 1024 px, saved to `maps/textures/props/` and unpacked
+  from the .blend (the glTF importer packs them; the .blend went 11 MB ->
+  1 MB). Some SciFi models look for textures next to them: found in the
+  pack. Plain-coloured materials (the cars' ~15) become cells of one
+  palette texture (`palette_flat_materials`): 44 -> 32 draw calls.
+- Ladders: the Platformer Pack's ladder models in the map's dark metal
+  colour, stacked and stretched a little to each height (`place_ladders`).
+- Metal footsteps: `meta.metal` floors (catwalks, crane deck);
+  `World.onMetal`; main.js swaps 'step' for 'stepMetal'
+  (`sounds/footsteps/metallic_footstep.mp3`); characters on a ladder make a
+  'climb' sound (also metal) every 0.6 m.
+- Lightmap fixes (the first bake with props used ~1% of the lightmap, all
+  islands in a thin strip): (1) projected object by object
+  (`project_lightmap`) then joined, scaled by area and packed: projecting
+  the whole joined map put some walls edge-on (no UV area), which set the
+  packing's scale; (2) no welding any more, and the generator cuts every
+  visual mesh at a 12 m grid (`LIGHTMAP_PIECE`, split edges) so the long
+  canal / boundary strips become 12 m islands; (3) faces pressed back to
+  back against another (walls against the boundary blocks) are removed.
+  Bake ~2.5 min, lightmap 2.7 MB.
+- Known: small curved props (the cars) get few lightmap pixels per face;
+  the sports car shows faint dark stripes.
+- 94 props, ~125k triangles, 32 draw calls; map ~3.4 MB + lightmap 2.7 MB.
+- Checked: walking into a car, a crate stack, a tree trunk stops you;
+  shots hit cars and pass through leaves; the bots' navigation still
+  reaches every roof, ladder top, the subway, canal and both bases.
+
+## 61. Furniture and food; props lit in real time (2026-11-06)
+
+- New packs (CC0): Ultimate House Interior Pack, Ultimate Food Pack
+  (Quaternius). Modelled ~2x (furniture) and ~4-10x (food) too big:
+  `PROPS` entries take a scale (`FURNITURE` 0.55) and a lift (None: stand
+  on the lowest point). Food is decimated to a third (tiny on screen).
+- `furnish_north()`: station waiting couches / plants / bins; Hospital
+  (Hotel) lobby desk and couch, wards with beds and nightstands on 2F-4F,
+  sinks, a meeting table on 5F; Bank (Police) counters, desks and chairs,
+  bookshelves upstairs; Warehouse (Factory) racks; bins on the street;
+  a café upstairs in the Market Hall. `food_on()`: rows of fruit, veg, fish,
+  bread on every stall counter (Market Alley, Market Hall; the Market Hall's
+  stalls made symmetric). Beds, tables, couches, shelves, counters are
+  solid; chairs, plants, lamps, bins, food aren't.
+- Ground floors get a visual floor 1 cm over the ground (`shell(floor=)`):
+  they showed the street's asphalt.
+- Props moved out of the lightmap: the `Props` collection is exported as
+  `district_props.glb` (lit in real time and matte, like the characters;
+  they still cast shadows into the bake). With ~130k prop faces the
+  lightmap packing failed again (1-4% used), and small curved props got
+  stripes anyway. The map's own lightmap UVs are now a box projection per
+  face (`project_lightmap`: no more smart projection, which turned some
+  faces edge-on): 80% of the lightmap used.
+- 404 props. Map 22 draw calls / 20k triangles (1.2 MB) + lightmap 2.9 MB +
+  props 11 draw calls / 181k triangles (3.3 MB). Bake ~4 min.
+- Checked: beds block movement; the bots' navigation still reaches every
+  roof, ladder top, the subway, the heal packs and both bases; screenshots
+  of the street, a ward and the Market Hall.
+
+## 62. Knife (2026-11-07)
+
+- `WEAPONS[0]` = knife (keys 1-7 now): the spawn weapon (`DEFAULT_WEAPON`)
+  and free; the pistol now costs $200. Weapon spots can offer any weapon,
+  the pistol and knife included. `melee: { range: 2, backDamage: 100 }`,
+  damage 50, cooldown 0.6 s (hold to keep swinging), `moveSpeed` 1.12 (main.js
+  input speed; bots too). No ammo (`magSize` 0: reloads are no-ops), HUD
+  ammo hidden.
+- Host `onSwing`: the nearest enemy (as the swinger saw them, lag
+  compensated) within range + capsule radius, within 0.6 rad (~35°) of the
+  look direction horizontally and 1.4 m vertically, with a clear line to
+  their chest. From behind (the victim's facing within ~60° of the swing's
+  direction): backDamage. The 'shot' broadcast has no tracers (`es: []`):
+  others play the swing and the swish.
+- Animation: Mixamo "Boxing Idle" (`knife_idle`) and "Boxing Swing"
+  (`knife_swing`, frames 4-44: wind-up, the hook fastest at frame 16, back to
+  the guard) in `convert_assets.py` CLIPS. The knife set's legs are the
+  rifle's; the guard is an upper-body overlay (KNIFE_GUARD weight 12), the
+  swing another (24) played once per attack, sped up to 0.6 s. No aiming IK,
+  no left hand on it: the knife stays as the fist holds it.
+- The knife in the fist (`knifeInFist`): blade straight out of the knuckles
+  (a push-dagger grip), flat to the thumb / little-finger sides. Tried
+  first: pointing forward from the guard (the hook then pointed it down) and
+  out of the thumb side (in a boxing guard the thumbs face the boxer: it
+  pointed back at the face). Now forward-up in the guard, broadside to the
+  first-person camera, and swept sideways by the hook.
+- First person: `VIEW_EYE.knife` puts the eye left / above so the guard's
+  fists sit lower right.
+- Model: Quaternius Survival Pack `Knife.fbx` (CC0) copied to `fbx/Gun/`,
+  `build_knife()`: blade forward, origin mid-handle, 0.32 m; colours by
+  material name.
+- Sound: 'swing' (synthesised swish, loudest ~0.16 s in, with the hand).
+- Bots: RANGE.knife 1.2 m; with the knife they run straight at the target,
+  and if something's in the way (a car), follow the navigation graph to them
+  (re-planned every second); swing only within reach.
+- Checked: from behind 100, face to face 50, 2.8 m away nothing, aimed 90°
+  away nothing; a knife bot behind a car went round it and killed (100, 50,
+  50); preview: guard (third / first person) and the swing frozen at
+  frames 11-18.
+- Known: headshot hitboxes use the rifle stance's head position (the guard's
+  head is close); during the swing the right arm crosses the first-person
+  view for ~0.2 s.
+
+## 63. Knife animation fixes (2026-11-07)
+
+Feedback: the left fist showed in first person, the knife looked stuck to
+the wrist, the swing was hard to see (not at all running or crouched), and
+crouched it went off to the right.
+
+- Left fist: IK'd down by `KNIFE_LEFT_DROP` from the guard's place (following
+  the chest), out of the first-person view.
+- Icepick grip (`knifeInFist`): the handle in the curled fingers (between the
+  knuckles, the fingertips and the palm; the old spot, half way along the
+  hand bones, was mid-palm, by the wrist) and the blade out of the
+  little-finger side.
+- Right arm: no longer the clip's. `holdKnife` IKs the fist along
+  `KNIFE_PATH`, keys relative to the eyes and turned with the view (position,
+  and the knife's tip / edge directions): the guard low right with the blade
+  across the view; a wind-up to the upper right, a diagonal slash out in
+  front to the lower left, back to the guard by 0.75 of the swing. The clip
+  version swung at about chin height, ~0.2-0.4 m from the eyes, mostly
+  below the screen.
+- Running / crouched: the boxing clips' upper body sat on the legs' pelvis,
+  which leans forward running and turns aside crouching (the crouch clips
+  hold a rifle). `uprightSpine` turns the lowest spine bone as in the knife's
+  standing idle, so the body faces forward; the rifle's crouch straightening
+  is skipped for the knife.
+- `VIEW_EYE.knife` [-0.15, -0.02, 0.05].
+- Preview: `preview.paused` freezes the animation (for looking at single
+  swing frames); `preview.renderer` is exposed.
+- Checked in the preview (both genders): guard and wind-up / mid / end of the
+  slash visible in first person standing, running, strafing and crouched,
+  at pitches -1.2 to 1.2 (same place on screen); third person crouched, the
+  slash goes out in front.
+
+Follow-up feedback: the left fist was too stiff, and the keyed slash read as
+a stab; keep the original swing, just reach out a little further.
+
+- `KNIFE_PATH` / `holdKnife` removed: the right arm is the boxing clips'
+  again. `extendKnife` pushes the fist out along the view by up to
+  `KNIFE_REACH` (0.18 m, a sine out and back over the first 70% of the
+  swing), IK'd, the hand turned as the clip turns it.
+- Left fist: lowered from where the clips put it each frame (not a fixed
+  place), so it keeps the guard's bob and the swing's pull-back, plus
+  `KNIFE_LEFT_SWAY` (6 cm) forward / back with the run cycle. Measured
+  ranges: 5-17 cm; never in the first-person view (lowest edge -0.77, the
+  fist's top at most -1.7).
+- `VIEW_EYE.knife` [-0.25, 0.03, 0.05]: the guard fist lower right, off the
+  crosshair; the swing's fist stays on screen standing, running and crouched
+  (the tip dips just below the edge for a moment at the wind-up).
+
+Then: turn the right hand to the right (show the back of the hand and the
+blade), which should also make the hook read as a right-to-left slash.
+
+- `KNIFE_TURN`: the fist turned from the clips' about axes in the hand's own
+  terms (along it / toward the thumb / out of the back, so the same for both
+  skeletons), applied every frame on top of the clip (its motion kept). The
+  guard: 1.3 rad, the back of the hand toward the view, the blade out to the
+  right. Mid-swing (blended by the same out-and-back curve as the reach):
+  0.86 rad about another axis, the blade trailing out to the right,
+  broadside, as the fist sweeps left. (Solved from the wanted knife
+  direction in camera space at a frozen frame; keeping the guard's turn
+  through the hook pointed the blade up and away.) A turn to show the back
+  of the hand with the blade down-left would have needed ~160° at the
+  wrist.
+- `KNIFE_REACH` [up 0.1, out 0.18] m: lifted a little too, the hook's end
+  was low.
+
+Then: the wrist was at a harsh angle to the forearm (KNIFE_TURN turned the
+hand ~75° at the wrist), and mid-swing the extra turn looked like the wrist
+bending down; wanted the knife ~45° to the front and the original sideways
+swipe.
+
+- `KNIFE_TURN` replaced by `KNIFE_TWIST`: the forearm is turned about its own
+  length (pronation), so the hand keeps the clips' wrist (measured: the
+  guard's is only 1-7° off straight). Guard -0.8 rad: the back of the hand
+  toward the view, the tip ~45° front right (view space 0.64 right, 0.15
+  up, 0.76 forward). Swing -0.2 rad (blended by the reach's out-and-back): the
+  blade trails right and a little down, flat toward the view (face 0.45-0.6
+  vs ~0.2 keeping -0.8, where it was edge-on).
+- `KNIFE_STRAIGHTEN` 0.3: the hook bends the wrist ~48° mid-swing; 30% of
+  that taken out (~33°). More (0.6) turned the blade edge-on.
+- Reach no longer keeps the hand's world turn (it rides on the forearm, so
+  the wrist doesn't change when the arm extends).
+- `VIEW_EYE.knife` [-0.25, 0.05, -0.05]: further back, so the fist (very
+  close before) doesn't hide the blade.
+
+## 64. Ladder climb facing (2026-11-07)
+
+Climbers faced away from the ladder. main.js already turns a remote avatar
+to face it (yaw from the ladder's normal, which points at the climber), but
+the Mixamo climb clip itself faces +Z where every other clip faces -Z
+(checked in the preview: running forward the body faces -Z; climbing at the
+same yaw it faced +Z, hands reaching backward). `convert_assets.py`: TURNED
+clips are turned 180° about up when retargeted (bone turns and the hips'
+movement). Now the hands reach 0.29-0.43 m forward, onto the rungs (the
+climber is held 0.45 m off the ladder's plane). `npm run build:anims`.
+
+## 65. Clock hands (2026-11-07)
+
+The Clock Tower's three faces (N, S, W; the east side has the ladder) get
+12 hour ticks (longer at 12/3/6/9), an hour and a minute hand showing 10:10,
+and a hub, in a new dark `ClockHand` material (tinted concrete). Built from
+`face_bar()` (a bar standing off a vertical face at any angle, visual only)
+via `clock(centre, normal, hour, minute)` in district_generator.py. Checked
+from outside each face: all read 10:10 the right way round. Rebuilt with
+`npm run gen:map && npm run build:map`.
+
+## 66. Central Station / City Hall 2nd floor: staff lounge, windows (2026-11-08)
+
+- `station_lounge()` (district_generator.py, mirrored into City Hall): all
+  along the north wall (City Hall: south), z -59.7 .. -54.8, x -22 .. 19, so
+  the other half of the floor and both stair heads stay open. Middle: a
+  fireplace, rug, coffee table, a sofa facing the fire (its back to the
+  room), two armchairs, bookshelves, floor lamps and plants. West: a sofa
+  corner (sofa against the wall, rug, coffee table, two armchairs facing
+  it), a sideboard. Between: a second sofa. East: a pantry (four counters, a
+  fridge, a bin) and two café tables with chairs on round rugs. New PROPS:
+  fireplace, sofa (Couch_Large2), armchair (Couch_Small2), rug / rug2 /
+  rug_round, coffee_table (Table_RoundSmall2), floor_lamp (Light_Stand1),
+  sideboard (Drawer_1). Sofas, armchairs, tables, shelves, fireplace and
+  counters are solid; rugs, lamps, plants, chairs aren't.
+- Prop turns (rot): 0 faces south, 180 north, 90 east, -90 west (sofas,
+  armchairs, chairs, fireplace alike).
+- The 2nd floor spawns moved from z -55 to -51.5 / -49.5 (the armchairs
+  reach -55.2).
+- Windows on the 2nd floor: east and west walls (z -57.3 .. -55.7), and in
+  the south wall only in line with the Hospital (x -19.8 .. -18.2) and the
+  Bank (17.2 .. 18.8), so the buildings between block any line of fire to
+  City Hall's twins (which face the Hotel and the Police Station). Checked
+  from inside: the Hospital, the Bank and the Police Station fill them.
+
+Then: windows 5x as wide; two stairs down from the middle of the south wall
+(City Hall: north), facing away from each other.
+
+- Windows 8 m wide: east / west z -59.3 .. -51.3 (over the side stairs'
+  heads, away from the lounge), south x -23 .. -15 (Hospital) and 14 .. 22
+  (Bank). Line of fire re-checked numerically (scratchpad los.py: lines
+  between every pair of points across both windows' faces, in plan,
+  against the Hospital / Bank / Hotel / Police footprints): none get
+  through; the nearest pass the Bank's and Hotel's corners. Those buildings'
+  faces toward the bases have no openings at that height.
+- Middle stairs: a landing at x -1.4 .. 0.6 on the south wall (z -47.9 ..
+  -46.3); flights x -6.2 .. -1.4 down to the west and 0.6 .. 5.4 down to the
+  east (4.8 m for 3 m, like the side stairs), in holes in the 2nd floor with
+  rails along their open sides. Coming down you face that side's exits
+  (the south door, the end door).
+
+Then: east / west windows moved to the walls' middles (z -57 .. -49); the
+rugs flickered through the floor in their middles: the House Interior
+rugs are mostly flat at their base (Carpet_Round: 70 of 78 vertices at
+y 0), level with the floor, so they z-fought. `RUG_LIFT` 1.5 cm on all
+rug keys (rug, rug2, rug_round, carpet).
+
+## 67. Hotel (and Hospital): lobby, lounges, guest rooms (2026-11-08)
+
+Built as the Hospital and mirrored, so the Hospital gets the same; the
+Hotel's north (canal side) is the Hospital's z -16 side.
+
+- `hotel()` (district_generator.py) replaces the wards (beds, nightstands,
+  sinks) and the top floor office.
+- Ground floor (lobby): a reception desk of two drawer units (rot 90, 4.6 m
+  along the east side by the canal-side entrance), a shelf and the clerk's
+  chair behind; a fireplace lounge against the west wall (rug, coffee
+  table, sofa facing the fire, two armchairs, lamps); a second sofa group at
+  the far end; plants either side of the entrance.
+- Upper floors (all four): at the far end a lounge (sofa against the wall,
+  rug, coffee table, two armchairs, lamps, sideboard, bookshelf, plants),
+  clear of the stairs' ends, the windows and the 3rd floor skybridge door.
+  On the canal side two guest rooms (z -20.3 .. -16.3; partition at
+  x -19.2 .. -18.9; doors x -25 .. -23.6 and -15 .. -13.6 in a wall at
+  z -20.6 .. -20.3, leaving a 1.4 m corridor past the stairs' ends), each
+  with a bed, rug, table, chair and bookshelf kept off the paths from the
+  door to its windows. The west wall's last window moved from z -21 .. -19.4
+  (it would have crossed the room wall) to -19.6 .. -18, inside the room.
+
+Then: bigger plants. `plant` (the cactus, Houseplant_3) scale 0.77 -> 1.7
+(~1.4 m); `plant2` Houseplant_1 (0.55 m) -> Houseplant_6 at 1.15 (a big
+leafy plant, ~1.1 m tall and wide). Compared the pack's plants side by side
+in the game first: Houseplant_8, the tallest, is a sparse bare-twig plant;
+2 and 5 are tabletop size; 4 a snake plant. Every plant on the map uses
+these two keys, so all of them grew.
+
+## 68. Police Station (and Bank): front desk, waiting area, offices (2026-11-08)
+
+`police()` and `office()` in tools/district_generator.py (built as the Bank, mirrored to the Police Station like every north/south pair).
+
+- **Ground floor:** a front desk of three drawer units along the canal-side wall, with monitors (map boxes, facing the officers), officers' chairs, shelves and a sideboard behind it. Five waiting sofas against the walls, clear of the three doors and the stairs' foot, with a coffee table and plants. An interview table with two chairs beside the stairs.
+- **Upper floors (2F, 3F):** five cubicle pods (14 desks, 28 seats per floor). Desks, partitions (1.25 m outside, 1.1 m between desks) and monitors/keyboards are map geometry (`Desk`, `Partition`, `Monitor` surfaces), so they're baked into the lightmap; partitions and desktops collide (cover), monitors don't. Aisles are kept to the windows, the stairs' landings (2F north end, 3F south end) and the 3F skybridge door. A meeting table, filing drawers, shelves and plants along the walls.
+- Follow-up: too crowded, so the office was cut to three pods (one of three desks a side, two of two: 14 seats per floor) with 2.5–4.5 m aisles between them.
+
+## 69. Construction site: modern drums and blocks (2026-11-08)
+
+The barrels ('barrel', the SciFi kit's Prop_Barrel_Large) and the blocks ('crate2', Prop_Crate4) wore the kit's sci-fi trim sheet. PROPS entries now take an optional 4th field, a SURFACES material: `retexture()` in tools/district_generator.py box-projects UVs onto the model (a tile per the surface's metres per tile) and swaps in that one material. 'barrel' uses `Drum` (concrete, painted orange) and 'crate2' uses `Block` (plain concrete). Every barrel on the map uses the same key, so the Warehouse's and the canal's changed too.
+
+## 70. Subway entrance: room round the stairs' head (2026-11-08)
+
+The entrance building's stairs start at its west end, and the west wall stood right against their head, so from the north and south doors the stairs' low walls blocked the way in (you had to jump them). The building's west wall moved 2 m out (x -24 → -26: the shell, the roof slab and the zone), leaving a 2.5 m walkway between the stairs' head and the wall's door.
+
+## 71. Police cars by the Police Station; first-aid case heal pack (2026-11-08)
+
+- The SUV and the orange sports car parked beside the Police Station (on Main Street) are police cars now; their spots beside the Bank keep the SUV and the sports car (props_north places each pair unmirrored).
+- Heal packs: the Survival Pack's white first-aid case (`FirstAidKit_Hard.obj`) instead of the canvas-textured box. `build_medkit()` in tools/convert_assets.py writes medkit.glb (0.6 m wide, MEDKIT_WIDTH, origin at its middle, colours baked to vertex colours); it's built with the weapons (`npm run build:guns`), loaded as `assets.medkit` and cloned by `makeHealPack()` in render.js.
+
+## 72. Hospital and Bank get their own furniture (2026-11-08)
+
+Until now the Hotel's furniture was mirrored into the Hospital and the Police Station's into the Bank. Now only the plan is shared: walls (incl. the guest/patient room walls), doors, windows, stairs, the office cubicles and the counter's monitors (map geometry, still mirrored). The furniture is placed per building:
+
+- `south()` / `north()` place a prop on one side only (south() takes north-half coordinates and mirrors them). `hotel()` and `police()` now use south(); the new `hospital()` and `bank()` use north().
+- **Hospital:** the reception desk where the Hotel's is, two rows of waiting chairs, an examination corner (two beds between curtains, sink, medicine shelf and drawers). Upper floors: a ward of four beds along the north wall with curtains and nightstands, a nurses' desk; the canal-side rooms are patient rooms (two beds / one bed, sinks, visitors' chairs), clear of door-to-window paths.
+- **Bank:** a teller counter in the police desk's place (tellers' chairs, sideboards behind), benches (`couch2`) against the walls, two writing tables in front of the queue, an advisor's table. Upper floors: filing drawers, a client sofa corner between the canal-side windows, a bookshelf, plants.
+- New PROPS key: `curtain` (Curtains_Single).
+- Cover differs a little between the twins now (the solid furniture isn't in identical spots).
+
+### 73. Hospital waiting area, reception monitors
+- Hospital ground floor: the exam corner and the waiting chairs are gone; it's a patients' waiting area of sofas (four along the north wall, three on each side wall clear of the doors, two back-to-back pairs in the middle), with plants and a bin. The reception desk keeps its two chairs and the shelf behind it.
+- Reception monitors: two `r.box` monitors on the reception desk (x −14.15, z −19.9 / −21.2, facing the clerks) in north_half, so the Hotel's front desk gets them too.
+
+### 74. Warehouse north door
+- The rack at x 37.3 stood in the Warehouse's north door (x 35 .. 39) and, mirrored, the Factory's south door; removed. The one at x 33.5 stays.
+- (Follow-up) The last rack (x 33.5) removed too: the Warehouse and the Factory have no shelves.
+
+### 75. Market stalls
+- Counters ('Stall'): wood, from the top (plank) band of the Medieval kit's T_WoodTrim sheet, repeated 4x into maps/textures/wood.png (texture('wood')). The Market Hall's counters share the material, so they're wooden too.
+- Awnings: ten 0.4 m strips alternating 'AwningRed' / 'AwningWhite', each a `tilted()` slab (new primitive, mirrored in mirror_call) sloping from 2.95 m at the wall to 2.5 m at the alley edge.
+- Produce: one category per counter (alley: fruit / fish / vegetables; hall: vegetables / bread downstairs, fruit / fish upstairs). food_on() gives each kind a share of the counter and places a loose patch at a random size and spot in it, random turns, seeded per counter (same every build); round fruit (PILED) heaps up in up to 3 layers, each one above resting on two below. Hall food is now mirrored=False (it was placed twice over, mixing the two counters' kinds).
+- Props went from 339k to 401k triangles (still 11 draw calls).
+
+### 76. More Market Hall stalls
+- Six more counters per floor (1 m high, wooden, own produce), clear of the doors, stairs, windows and the café. Ground floor: along the north/south walls west of the doors (x 31.6..34.2), either side of the aisle from the west door (x 33.5..36.5, z ±1.4..2.4), by the stairs (x 38.8..40.8, z ±4.8..6). Upstairs: either side of the middle (x 33..35.5) and by the stair heads (x 38.6..40.6) at z ±1.4..2.4, along the north/south walls (x 35.2..38.2). The Market Hall now has 8 counters per floor.
+
+### 77. Pickup spots
+- Weapon: Hospital/Hotel 4F -> their ground floor (-14.5, ∓29.5, clear of the sofas in both).
+- Warehouse/Factory: the catwalk weapon is a heal pack now; the roof money is gone.
+- Money round the centre (unmirrored): subway concourse (-7, -4.5, 2.5, between the pillars), Clock Tower ground floor (1.2, 0, 0), on the fountain platform (-6, 0.9, 0), on the plaza between the two subway stairs (6, 0, 0). With the tower top and crane cab: 6 money spots, all in the centre row.
+
+### 78. Gun hold point regression (P90 sat back)
+- calibrateGrip's rest grip point (gripRest[...].grip: where holdGun puts the gun's grip point) used to be the hand's centre: `centre.sub(grip)` changed centre in place and the later `centre.add(grip)` undid it. The knife work made the first a clone (knifeInFist needs the centre), so the second moved the point by the set's rightGrip: 7 cm down and back for the rifle set (most visible on the bullpup P90), 3.5/4 cm for the pistols. Now `centre.clone()`, as before.
+
+### 79. Landmark signs, Clock Tower ladder, Subway roof money
+- signs() (called from centre_row, not mirrored): the Hospital's red cross and the Hotel's "HOTEL" in the window-free column above their canal-side doors (x -23.4 .. -16), the Bank's gold "$" in the column x 16.6 .. 20 of its south wall, "★ POLICE" (gold star, white letters) along the Police Station's north wall below its first windows (y 1.3 .. 3.3). All on the walls facing the centre.
+- New primitives: face_poly (a convex shape standing off a wall), arc, GLYPHS (stroke letters H O T E L P I C $ in a unit box), stroke (a polyline as mitred pieces sharing edges), sign_text, star. Overlapping pieces in one plane bake dark (each shades the other): the first version, bars with overlapping caps, came out with dark curves and a dark centre in the cross. Strokes are now non-overlapping strips; strokes that cross stand 2 cm further out each; the cross is one upright bar plus two arms that touch it.
+- Clock Tower: the ladder is on the west wall (plane x -2.2, facing +x) under the balcony opening; at the top you step on through the opening onto the balcony. The free-standing ladder and its backing plate are gone; a rail closes the hole's east side at 14 m.
+- Money: the Clock Tower ground floor spot moved to the Subway entrance roof (-20, 4.3, 0).
+
+### 80. Boundary top, skyline gaps
+- Players could stand on the boundary blocks' top edge (their radius overlapping it at the play-bounds clamp). Each block now has an invisible players-only box (COLP, like the rails) from its top to 80 m, so there's no edge to stand on; bullets are unaffected.
+- Skyline (render.js): the rings (nearest ~94 m out) left the rectangle's long sides open. Added a seeded row of blocks 9-17 m beyond each side's boundary blocks (every ~13 m, 13-24 m tall, point-symmetric like the rings).
+
+### 81. Wider knife swing, bigger hit area
+- Animation (character.js extendKnife): on top of the hook clip and KNIFE_REACH's push out, the fist's IK target sweeps sideways by KNIFE_SWEEP (0.28 m) * sin(2πu): out to the right in the first half of the swing, across to the left in the second, 0 at both ends (no pop out of / back into the guard). KNIFE_REACH [0.1, 0.18] -> [0.12, 0.3] (up, forward).
+- (Follow-up) To the left edge of the view by turning the upper body, not by reaching: KNIFE_TURN [right, left] = [0.25, 1.1] rad about up (the same sin(2πu) curve: right on the wind-up, left on the follow-through), 40% in the abdomen and 60% in the torso, the neck turned back the whole amount so the head keeps looking ahead. Done first in extendKnife, so the forearm twist and the reach IK ride along. The sideways push is back to 0.28 m each way. (A first try pushed the fist 0.8 m left and pulled it back toward the camera: the arm, straight there, looked stretched across the view.)
+- (Follow-up 2) Less far out front, no stretch: KNIFE_REACH [up, forward] = [0.2, 0.12] (was [0.12, 0.3]); the reach IK target is kept within KNIFE_ARM_MAX (90%) of the arm's length from the shoulder, so the elbow never locks straight; KNIFE_TURN left 1.1 -> 0.8 (the closer fist needs less turn to reach the left edge; with 1.1 the forearm swept low across the camera). Knife range back to 2.0 m, then 1.6 m (SWING_ANGLE stays 0.9 rad).
+- Hit area: knife melee.range 2.0 -> 2.5 m (shared.js; bots close to this range before swinging); host SWING_ANGLE 0.6 -> 0.9 rad (~35° -> ~52° either side of the aim). SWING_HEIGHT (1.4 m) unchanged.
+
+### 82. Scope ring, Overwatch-style hit markers, hit sounds
+- Sniper scope: a red ring (3.6vmin, 2px) in the middle (#scope .ring); the scope's black cross lines are gradients that stop 3.2vmin from the centre, so nothing crosses into the ring.
+- Hit markers (#hitmarker: two inline SVGs, shown by class): body = small white X (four diagonal wedges, sharp toward an empty middle, 22px), head = bigger red X (34px), kill = red skull (30px, pops in from 1.6x), blocked (spawn-protected) = grey X. Shown 140 / 200 / 500 ms. (Was a diamond: red / gold / bigger red.)
+- Hit sounds (audio.js, synthesised, our own hits only, not positioned), built on knock(): a tuned "tok" (two tones, ~14 ms, e.g. 1.05 / 1.58 kHz) with a tiny 4.2 kHz click on its attack, over a low thud dropping in pitch (300 -> 110 Hz). hitHead: a higher tok plus a metallic tink (3.2 / 4.48 / 5.76 kHz, 50 ms); hitKill: a heavier thud, an 85 -> 45 Hz boom and a short ring. No noise anywhere (a noise smack sounded like the gunshot; before that, plain sine ticks didn't sound like a hit). Volumes 0.3 / 0.36 / 0.45 (tried 0.95 / 1.05 / 1.15, 0.6 / 0.68 / 0.78, 0.5 / 0.57 / 0.65; back to these, now with the longer tok), the tok ~24 ms, pitch spread 0.1 / 0.06 / 0.04. Not for blocked hits. Played from main.js's 'hit' handler with the marker.
+
+### 83. Knife head hitbox
+- headCenter (shared.js) had two holding styles, rifle and pistol; the knife fell back to the rifle's (head to the right, cheek on the stock), so its head box sat ~17 cm right of and up to ~19 cm in front of the drawn head (36 cm off strafing): headshots mostly missed the knife, which everyone spawns with. Added a knife style (HEAD_STYLE.knife, CROUCH_STYLE.knife) with its own arc (arm, tilt, follow, pivot) and leans, fitted to the knife guard measured in the browser (head = midpoint of the Head and Head_end bones, over pitch -0.9..0.9 and the four move directions): within ~3 cm standing and moving, <1 cm crouched. The gun styles measured within ~5 cm (unchanged).
+
+### 84. Hit sparks
+- On every 'hit' (not blocked, not when we're the victim), main.js calls renderer.hitSparks(victim, from, hs): at the avatar's head (headshot) or torso, pushed 10-15 cm toward the shooter (msg.from: the shot's origin, already in the message), Tracers.addHitSparks draws a flash (80 ms) and 9 (body) / 14 (head) spark sprites thrown out round the direction to the shooter, a little upward, 1.5-4.5 m/s, falling (9.8 m/s²), shrinking and fading over 0.16-0.3 s. Additive star sprites like the impact spark; flash and sparks grow with distance (1 + 0.06 per m) so they still read far off; depth-tested (not seen through walls). Everyone sees them, the knife's hits too.
+
+### 85. No-clip: boundary distance, underground walls
+- No-clip clamped the player to the play bounds, which are the boundary blocks' inner faces: the camera got into the blocks. keepInside / clampXZ take a margin; no-clip keeps NOCLIP_EDGE (0.8 m) inside. (Walking normally, collision already keeps the radius off them.)
+- Below ground level (feet < -0.05: the canal, the subway), a no-clip step is only taken where there's a floor within NOCLIP_FLOOR_SEARCH (8 m) below (World.floorBelow: the first surface hit going down must face up, so not the underside of a wall block we're inside); else it slides (x only, then z only) or stops. Before, walking through the canal's / concourse's walls left the player over solid earth with no floor: they fell to -8 and were put back at y 1. Tested: the canal stops at its walls' inner faces (x -31 / -40), the concourse at its walls, the canal ramps and the subway stairs to Construction still climb, walking through buildings above ground unchanged.
+
+### 86. Triggerbot hack
+- HACKS gets { id: 'trigger', price: 1200 } between HP ($1,000) and Aim ($2,000) (the list is by price; the mask's bits after it moved up one, fine since host and clients share the list). i18n en "Triggerbot", ko "트리거봇"; README table.
+- Client only (main.js): tryShoot's trigger counts as pulled while has('trigger') and crosshairOnEnemy(w): the view's centre ray (before spread) reaches an enemy's hitbox (rayPlayer, head or body) before any wall (world.raycast); with the knife, only within melee.range. Everything else in tryShoot still applies (cooldown, ammo, reload, weapon switch, mouse captured). Semi-automatic guns fire at their cooldown while on target. The host needs nothing (hacks are just a bought mask).
+- Tested in a match with a frozen enemy bot: aimed above it, no shots; crosshair on it, 4 rifle shots and a headshot kill; behind a wall, no shots. (Firing needs pointer lock, which the browser automation can't get: the test overrode document.pointerLockElement in the page.)
+
+### 87. Rapid-melee hack
+- HACKS gets { id: 'melee', price: 800 } between Fly ($700) and Wall ($900) (the later bits moved up one again). i18n en "Rapid-melee hack", ko "연속 근접 핵"; README table.
+- fireCooldown: a melee weapon with the hack cools down RAPID_MELEE as long: 0.1, the knife 0.6 s -> 0.06 s (~16 swings/s, normal damage each: 50, 100 from behind; ~800 damage/s; first 0.15, made 10x on request). The client's tryShoot and the host's onShoot both use fireCooldown, so the host accepts the faster swings. The knife is already auto (swings while the button is held).
+- Animation (character.js): enemies' hacks aren't sent, so a swing that starts sooner than SWING_TIME after the last plays in the time since it (swingTime, at least SWING_TIME_MIN 0.05 s): the clip's timeScale, the swing blend and extendKnife's reach / sweep / torso turn all use swingTime. Normal swings are unchanged.
+- Tested (frozen enemy bot 1.2 m away, 200 HP, button held): normal knife 4 swings, killed in 1.84 s; rapid-melee 4 swings, killed in 0.30 s.
+
+### 88. Fake-lag hack
+- HACKS gets { id: 'fakelag', price: 1500 } between Triggerbot ($1,200) and Aim ($2,000) (the later bits moved up one again). i18n en "Fake-lag hack", ko "페이크 랙 핵"; README table. shared.js: FAKE_LAG_GHOST = 1 s, FAKE_LAG_REVEAL = 1 s.
+- Host: per player ghost / ghostAt / revealUntil. updateFakeLag (each tick): a live fake-lag player not revealed gets an afterimage of their pose ({ pos, yaw, pitch, crouch, weapon }) every FAKE_LAG_GHOST s; anyone else none. revealFakeLag (onShoot: a knife swing, or a shot actually fired): the afterimage goes, revealUntil = now + 1 s, the next afterimage when it ends. Snapshots carry, for a fake-lag player, fl: 1, rv (revealed), g (the afterimage) to everyone. apparent(q): where others see q, { pos, pose } (the afterimage while hidden; null with none yet). The real hitbox is unchanged: shots at the real (invisible) player still hit, shots at the afterimage do nothing.
+- Bots (bots.js) see, chase, aim at and judge range by apparent(): fooled like the hacks.
+- Client: Character.setFade(alpha) / applyFade: 0 hides the model, shadow, label and shield; in between draws with per-character transparent copies of the (shared) materials, made the first time each mesh is seen (guns are made later: setWeapon re-applies). renderRemotePlayers: hidden (fl and not rv): enemies fade 0 (avatar.fakeHidden = true), teammates 0.5; revealed 1. Renderer.updateGhost / removeGhost: the afterimage is a second Character (isGhost), solid, its name shown to enemies only; removeAvatar / clearAvatars remove it. Our own: the first-person body at 0.5 while hidden, our afterimage drawn too.
+- Hacks go by the afterimage (apparent(id, avatar) in main.js): the aim hack's head target, the triggerbot's ray, the wall hack (fakeHidden avatars off its layers, enemy afterimages on, own team's off) and the map hack's dot. Footsteps, gunshots and hit sparks stay at the real player.
+- Tested (enemy bot with fake-lag, afterimage frozen 2.4 m beside it): real body hidden, afterimage solid with the name; triggerbot on the invisible real body 0 shots, on the afterimage 3 shots and no damage; the bot attacks: real body shown, afterimage gone; triggerbot on it then fires and hits. Teammate view: real body half see-through. Own view: arms and gun half see-through, own afterimage drawn.
+- (While adding setFade, a script edit cut out every Character method between update() and dispose() (straightenSpine .. updateGunMagazine, incl. this session's uprightSpine / extendKnife / lowerLeftHand). Restored from an open tab's in-memory module (Function toString), with their comments from HEAD and this session's transcript; every method's source hash then matched the pre-break module except the intended changes.)
+- (Follow-up) See-through to self and team: 0.5 standing down to 0.2 at full speed (seeThrough(speed) in main.js, rounded to 0.05 so the materials aren't redone every frame; teammates by their drawn velocity, us by me.vel over the speed hack). Our own afterimage isn't drawn within OWN_GHOST_HIDE (1.5 m) of us: standing still it covered the camera. Enemies still see it.
+- (Follow-up 2) OWN_GHOST_HIDE 1.5 -> 0.5 m. Knife moveSpeed 1.12 -> 1.25 (the host doesn't cap speed; bots use it too).
+
+### 89. Wallbang hack
+- HACKS gets { id: 'wallbang', price: 1100 } between HP ($1,000) and Triggerbot ($1,200) (the later bits moved up one again). i18n en "Wallbang hack", ko "월뱅 핵"; README table.
+- Host onShoot: with the hack each shot (pellet) is traced against players out to MAX_RANGE, walls ignored, full damage; a miss still ends at the first wall (the tracer stops there). onSwing: the knife's wall check is skipped. Every gun and the knife.
+- Our client: the instant tracer goes through to the player it hits, with an impact spark where it enters the wall (Tracers.addImpact, split out of add). Others see the host's end point (through the wall), no entry spark.
+- The aim hack and triggerbot still need a clear line of sight (unchanged).
+- Tested (enemy bot 2 m behind the spawn room wall, rifle held 0.5 s): no hack 4 shots, 0 damage; wallbang 4 shots, 100 damage; wallbang + triggerbot with the crosshair on it: no shots. (The knife through a wall wasn't tested.)
+
+### 90. Smoke bomb
+- Animations: Mixamo "Throw Grenade" and "Run And Throw Grenade" (fbx/Character Animation), converted as throw (frames 35-70) and throw_run (33-62): just the throw (the hand fastest at 57 / 52), the pin and aim before and the settling after dropped. npm run build:anims.
+- shared.js: SMOKE (cooldown 20 s, fuse 1.5 s, radius 4 m, duration 8 s, grow 1 s, fadeOut 0.6 s, rise 1.2 m (the cloud's centre above the bomb), throw 13 m/s + 2.5 m/s up, bounce 0.4 / friction 0.6, size 0.06 m), THROW_TIME 0.7 s, THROW_RELEASE 0.63; smokeRadius(age), smokeCentre(pos), smokeBlocks(smokes, a, b, now) (segment within a cloud's radius).
+- World.stepGrenade(g, dt): gravity, BVH ray along the velocity, reflect off the hit face (bounce across, friction along), rest on a floor once slow; host and clients run it alike.
+- Host: smokeAt per player (0 on spawn: everyone spawns with one), holdingSmoke from the 'state' message (s). onThrow ('throw' {yaw, pitch, m}): if ready, cooldown starts, broadcast 'throw' (others play the throw), a grenade released THROW_TIME * THROW_RELEASE later from the eye (not through a wall in front) -> 'nade' {id, p, v}; updateGrenades steps it and after SMOKE.fuse -> 'smoke' {id, p, d}; clouds kept for their duration, in snapshots as sk [{id, p, age, d}] (late joiners), players' sm (holding) and sc (seconds to ready). Bots: canSee fails through smoke (HostServer.smokeBlocks). Cleared on a new round.
+- Character: GUNS.smoke (set 'knife': held in the fist like the knife, its guard pose), makeGun('smoke') = effects.makeSmokeBomb (grey canister, dark cap and ring); state.smoke shows it instead of the weapon; throwSmoke(moving) plays throw / throw_run on the upper body (THROW_WEIGHT), easing off the knife guard, extendKnife and lowerLeftHand meanwhile; the bomb is hidden from the release.
+- Effects: Smokes (renderer.smokes, made in setMap): bombs in flight (stepGrenade, spinning, bounce sounds) and clouds: 36 lumpy grey puff sprites spread through a flattened sphere, swelling over SMOKE.grow, thinning with smokeRadius at the end.
+- Client (main.js): C toggles smokeHeld (on cooldown: the icon shakes, the weapon stays); a click while held throws it (not the triggerbot), back to the weapon after THROW_TIME; switching weapons or dying puts it away. Cooldown from the snapshot's sc (our own throw counts at once). smoked(a, b): the aim hack skips heads through smoke, the triggerbot doesn't fire through it, enemy (and their afterimage's) names hidden through it. HUD: #smokeIcon left of the ammo (ready / held: gold / cooling: shaded conic sweep and seconds; .shake), #smokeView greys the view by how deep the eye is in a cloud. Sounds: the throw (swing), bounces (boltBack, higher), a synthesised hiss when it pops. i18n weapon.smoke (Smoke bomb / 연막탄); README.
+- Tested: C takes it out (canister in the fist, HUD "연막탄", icon gold); a click throws (throw clip, the bomb flies, bounces, pops into a cloud 1.5 s later; back on the knife; icon counts down from 20); C while cooling shakes the icon; triggerbot on an enemy 10 m away through a cloud: no shots, and a bot there can't see through it; in clear air 4 shots, 100 damage.
+- (Follow-up) Icon moved above the money (bottom 170px). SMOKE.radius 4 -> 6, grow 1 -> 0.3 s with an ease-out-cubic burst (puffs from 10% out, 25% size; puff size scales with the radius; 48 puffs), throw speed 13 -> 18 m/s. Cloud grey given in sRGB (as a linear colour it came out near white).
+- Holding: a new clip throw_hold ("Throw Grenade" frames 19-25: the grenade held in front of the chest before the pin) replaces the knife guard while the smoke bomb is out (smokeHold blend; the knife's extendKnife / lowerLeftHand off meanwhile); the canister drawn 1.25x. First person: holdSmokeInView IKs the right hand to SMOKE_IN_VIEW (0.19 right, 0.13 down, 0.34 ahead of the camera), else the chest-height hold was out of view.
+- Trajectory: while held, main.js predictThrow() runs the host's release (eye, not through a wall in front, the same velocity) through World.stepGrenade at 1/60 s up to the fuse; drawn from the bomb in hand easing into that path over its first 0.4 s (seen from behind, the path alone was a vertical line). Renderer.setTrajectory: a camera-facing red ribbon (wider with distance) and a red ring where it pops.
+- (Follow-up 2) Icon above the hack names too (bottom 192px; #hackName at 166px covered it). SMOKE.radius 6 -> 7. throw_hold held still on its first frame (timeScale 0): looped, its 7 frames jolted (measured after: the first-person hand moves 0 mm per frame standing). The trajectory ribbon and ring draw over everything (depthTest off, renderOrder 20): after a bounce the path runs along the floor, which hid it (the prediction went on through the bounces all along; the path itself stops at walls).
+- (Follow-up 3) Triggerbot fired through a fading cloud: smokeRadius shrank over the last fadeOut while the cloud still looked solid. Now it blocks at full size until the moment it's gone (7.99 s yes, 8.0 s no); only the look fades (effects: opacity by (duration - age) / fadeOut).
+- Facing left while holding: throw_hold's spine is already turned into the throw. Now only its right arm (RIGHT_ARM mask) is used, with an IK (holdSmoke) putting the right hand at SMOKE_HOLD (0.17 right, 0.08 up, 0.32 ahead of the chest, character space; the clip's arm on an upright body put the hand across the face) and the left fist down by the chest (lowerLeftHand, as with the knife). The upper body stays upright and forward.
+- (Follow-up 4) A cloud stayed in view ~2 s after it stopped blocking (another player's screen): the clouds aged by frame dt (capped at 0.05 s per frame, and nothing while a tab's in the background) while blocking (main.js smokes) goes by the clock. Clouds now age by the clock too (born time), so the look and the blocking end together everywhere.
+  Cleared clouds' ids are remembered (smokesDone) so the host's next snapshot, which may still list one for a few ms, doesn't add it back; both lists are emptied on leaving a room.
+
+(Follow-up 5) Teammates' name labels were drawn last (renderOrder 999, no depth test) so they showed on top of smoke; they now draw at renderOrder 4, after the window glass but before the smoke puffs (5), and labels no longer write depth. Holding the smoke bomb, the throw_hold clip's wind-up left the right elbow at shoulder height; after the hand IK, `swingElbow` turns the upper arm around the shoulder–hand line so the elbow points toward SMOKE_ELBOW (down and out from the chest), hand unchanged (elbow ~0.24 m below the shoulder instead of ~0.01 m).
+
+(Follow-up 6) The throw clips turn the upper body ~40-58 degrees left through the whole throw (shoulder line vs the facing; a side-on thrower), so throwing looked like facing left: `squareThrow` turns the abdomen/torso back right by THROW_TURN (32 degrees, × throwBlend), neck countered so the head stays forward; now ~8-26 degrees standing, and the running throw winds up right (+14) and follows through left (-24). Inside a smoke cloud only players right up close showed (each puff at 0.95 opacity filled the view, plus a 0.9 grey tint): the puffs near the eye now thin out (distance / puff size from SMOKE_NEAR [0.35, 1.3], down to SMOKE_NEAR_MIN 0.06), only while the eye is inside the cloud (outside, by the edge, it stays solid), and the tint is at most 0.3. A player 4 m away shows; 7 m away is lost in the smoke. (Visual only: hacks still go by smokeBlocks.)
+
+(Follow-up 7) Seeing inside smoke shortened: SMOKE_NEAR [0.28, 1.0], SMOKE_NEAR_MIN 0.08, tint up to 0.38. A player 3 m away shows through haze; 4.5 m away is lost.
+
+(Follow-up 8) Shortened again: SMOKE_NEAR [0.22, 0.8], SMOKE_NEAR_MIN 0.1, tint up to 0.45. A player 2 m away shows through haze; at 3 m only a faint silhouette.
+
+(Follow-up 9) Korean: 칼질핵 (rapid-melee), 월샷 (wallbang). Buy menu 980 px wide, hacks in two CSS columns (price order down the first, then the second), all in view without scrolling. The host's bot setting moved up under the money as a highlighted row of buttons (Off / 1 vs 1 ... 4 vs 4, `#botFill` buttons with data-n, `showBotFill`) with a one-line hint, instead of a small select at the bottom.
+
+(Follow-up 10) The victory hack is marked as the game's goal in the buy menu: label[data-id="victory"] in gold (border, gradient, slow glow), a 🏆 and a "GOAL" / "게임 목표" tag (buy.goal), less dimmed while unaffordable; its description now says to save up for it.
+
+(Follow-up 11) Sky cover for the fly hack (district_generator.py `balloons()`, after centre_row; not via the Recorder, each half placed directly): per half an ad blimp (`blimp`: 21 m capsule along x at (0, 17.5, ∓26), flat sides carrying "HACK COLA" (new glyphs A, K, space), red tail fins at +x, dark gondola) and a hot-air balloon (`hot_air_balloon`: envelope R 3.6 at (-35.5, 18.2, ∓28), 16 gores, North blue/white, South red/white; flat crown at 21.68; wooden basket floor at 9.6 with 1.1 m walls; ropes and burner visual only). `solid()` winds a convex solid's faces and puts them in COL. Verified: standing on the blimp top (20.6), the crown (21.68) and in the basket (9.6), both halves; raycasts stop at the hull / envelope / basket walls (so the aim hack and triggerbot don't see through them).
+
+(Follow-up 12) Blimps reworked: an ellipsoid 15 x 5 x 4.8 m (rounder, smaller), built in local space and turned (`yaw`), at (28, 20, ∓14) over Market Alley where the cross street meets it, turned ±18° (a V, not side to side); the ad's letters are placed one by one flat on the hull's equator, facing its normal. Hot-air balloons moved together to (-30.5, ∓11.5), by the canal at the Bridge Street planters. Verified: standing on the blimp tops (22.4), crown (21.68), basket (9.6); raycasts stop at both.
+
+(Follow-up 13) Blue's blimp: "HACK SOJU" with text and fins in SignBlue (new glyphs S, J, U; `blimp(..., text, mat)`); Red's stays "HACK COLA" in red. Hot-air balloons raised: envelope centre 20.5, crown 23.98 (the fly ceiling is 25 m for the feet: you can fly over it and land), basket floor 11.9. Verified landing on both crowns and in the basket.
+
+(Follow-up 14) The gun shook in the air with the pistol and revolver (the pistol set): their mid-air clip, pistol_jump_loop, is the Jump clip's apex, frames 8-10, only 0.067 s long; looped, it flicked between two different poses ~15 times a second (the gun jumped up to 21 mm a frame), all the time while flying. Now held on its first frame (timeScale 0, as throw_hold). Measured hovering with the fly hack, before and after 5 shots: 0.0 mm. (The rifle set's jump_loop is a real 1 s loop: steady.)
+
+(Follow-up 15) The real cause of the gun shaking in flight: three.js's PropertyMixer only writes a bone when its blended value differs from the previous frame's. In the air the jump loop holds still for stretches (and the pistol's is frozen), so the mixer skipped the bones and last frame's procedural changes (the aim's spine split by pitch, IK, the feet fix) stayed and were applied again on top: looking up or down while flying, the abdomen curled further every frame (head 1.45 -> ~0.7 m above the body), placeEyes pushed the body to keep the eye on the camera, and the gun swung up to ~50 cm a frame, then snapped back when the clip moved. Shooting made it likelier only because you aim while shooting. Fix in Character.update: every bone's local quaternion/position is restored to the clips' last output (`cleanPose`, saved right after mixer.update) before the mixer runs. Measured hovering at pitch -1.2..1.2 with the pistol, revolver, rifle, P90 and sniper: 0-0.3 mm per frame (was up to 530 mm). On the ground the aimed gun moves ~2 cm compared with before at small pitches (the old pose had small leftovers there too).
+
+(Follow-up 16) The crane's neck: the mast top (20-21.5 m) floated 2 m over the cab deck. Now a lattice between them: four 0.12 m corner posts (x 22.46 / 23.54, z ±0.54), top beams above head height, X braces (face_bar, visual) on the two z sides with players-only walls behind them; open toward the ladder (+x) and the far side, in line with the ladder's landing, so you walk from the ladder straight through it onto the deck (0.96 m between posts, 2 m clear). Verified: walking from the landing (x 23.8) to the deck's far rail (20.4); sideways stops at the braced sides.
+
+(Follow-up 17) Bots use hacks (bots.js): after the weapon, `pickHacks` buys random hacks that suit it (GUN_HACKS / KNIFE_HACKS: no fly, no-clip or victory) with the money left, up to the room's limit (HACK_SLOTS 3 with none), each slot filled with HACK_CHANCE 0.6. HP, infinite ammo, rapid melee, wallbang and fake-lag work through the host as for players; the bot code adds speed (stepPlayer speed / jumpHeight), recoil (spread x RECOIL_HACK), aim (always the head, AIM_HACK_ERROR 0.3, AIM_HACK_SETTLE 0.2 s), triggerbot (TRIGGER_REACTION 0.06-0.14 s), wall (ignores facing and smoke; fights through walls with wallbang, else hunts the nearest enemy, as with the map hack) and wallbang (keeps firing WALLBANG_MEMORY 1.5 s at a target gone behind cover). The host's toggle "Bots use hacks" (#botHacks in #botRow, localStorage hackfps.botHacks, message {t:'botHacks', on}, BotManager.setHacks): off also strips the bots' current hacks. Verified in Chrome, 4v4: bots bought hacks within the 2-hack limit over three respawns at $3,000, no errors in 40 s of play with speed / wall+wallbang / aim+trigger / map bots (none stuck), toggle off cleared hacks and HP 1500 -> 200 and kept respawns hack-free.
+
+(Follow-up 18) Game modes and the main menu. shared.js `MODES` (normal / melee / headshot: weapons, hacksOff, killTarget 50, headshotOnly, hp 1) with helpers weaponAllowed, weaponPrice (set weapons are free), startWeapon, hacksOffMask. The host gets `mode` (HostServer option; sent in 'welcome'): onSpawn rejects other weapons and off hacks; weapon spots refill to -2 (off: the renderer hides the ring, the minimap skips it); onWeapon (Admin) only allowed weapons; headshot mode: a hit only counts when it's a headshot, everyone's maxHp is mode.hp; `teamKills` per round (snapshot `tk`, reset by newRound) and teamWins() at the target (victory message with `kills` instead of `by`; feed 'teamWins'); victory() and teamWins() share endRound(). Bots: the mode's weapon, its hacks minus the off ones, always at the head in headshot mode. Client: buy menu shows off weapons / hacks greyed with "Off in this mode" (Victory without its gold), a yellow rules line, `kills / 50` scores, the mode in the room info; Admin switching only in normal mode. Main menu: Join / Create tabs (#menuTabs; Join first, and always from an invite link; last tab remembered: hackfps.tab), the Create tab has mode cards (#modeCards: icon, name, description, hacks off; hackfps.gameMode) and Hacks per life (#hackLimitPick, hackfps.mode as before), the panel widens for it. Verified in Chrome: menu both tabs; melee 4v4 (weapon spots off, bots knife-only with allowed hacks, buy menu), win at 50 kills and the reset next round; headshot 4v4 (body and leg shots absorbed with no damage, 20 s of bot play: 6 hits and 6 kills, all headshots, everyone 1/1 HP; HUD HP 1, rifle); a second tab from the invite link opens on Join and gets the mode, rifle and rules.
+
+(Follow-up 19) Spawns turned 45°: from straight ahead (Blue south, Red north: the hall's middle wall 5.2 m away) to the more open diagonal, the middle two towards the centre (`spawn(x, y, z, turn)`, turn + = towards +x; the empty's rotation pi + turn for Blue, -turn for Red). Clear view ahead at eye height now 42.4 / 7.4 / 7.4 / 25.5 / 43.8 / 41.0 m (x -14 / -5 / 4 / 13 / -20 / 18), the same for Red. district_meta.json patched to the same yaws without a map rebuild; the next `npm run gen:map && npm run build:map` writes them from the generator.
+
+(Follow-up 20) Cars collide along their shape: each car was one box as tall as its highest point, and the SUV's (1.55 m) was above the jump (1.22 m, plus the air step-up), though its bonnet is at ~1.0 m. Now `car_profile` (load_prop, Realistic Car Pack models) takes the highest point in each of CAR_SLICES 20 slices along the length (each cut: the higher of the two slices beside it), and `place` builds a prism per slice with a sloped top between the cuts (bonnet, windscreen, roof, boot; steepest ~42°, walkable). The map was rebuilt (collision 57 -> 64 KB). Verified with World.stepPlayer: both SUVs: jump onto the bonnet (0.96), stand, walk up onto the roof (1.50) without jumping; from the boot end a jump lands on the rear slope (1.37) and walks up; walking without a jump stays blocked. Normal car, taxi, police car, sports car: jumped onto from both ends (1.14-1.31).
+
+(Follow-up 21) Jump pads. Generator: `jumppad(x, y, z, h, r=0.9)` (mirrored): a 0.08 m disc (Rail rim, collision) with a cyan 'Pad' top (visual), and map_meta `jumppads` [{p: top centre, r, h}]. Placed at (8.5, 0, ∓23), h 12 (Main Street by the Bank / Police Station west wall; the parapet top is 10 m) and (-32.2, -2.5, ∓12), h 4.3 (canal bed by its east wall). World.stepPlayer: grounded within r of a pad (feet -0.1..0.3 m from its top), not climbing or flying: vel.y = sqrt(2 g h), and `player.launches` counts up. Client: on its own launch plays 'pad' (synthesised `launch`: a falling thump under a brightening whoosh) and sends {t:'pad'}; the host checks they're near a pad and broadcasts {t:'pad', from, p} for the others' positional sound; bots' launches too (Bot.update). Renderer: three additive cyan rings per pad rising 2 m every 1.2 s. Verified (stepPlayer): Main Street pads reach 12.0 m, steering east lands on the roof (9) both halves; canal pads reach 1.83 m above the street, steering east lands on it; nothing overhead. In play: the launch sound message reached the host; 4v4 bots crossed pads 6 times in 40 s, none stuck bouncing. Standing still on a pad bounces you again and again (steer off). Falling down the Bank's wall steering into it can land you on a 2F window sill (z -23 .. -21.4).
+
+(Follow-up 22) Sniper: unscoped spread 0.001 / 0.015 / 0.04 -> 0.015 / 0.04 / 0.08 (still / moving / air: a little wider than the rifle's 0.01 / 0.03 / 0.07; 0.03 / 0.06 / 0.09 was tried and too wide); scoped unchanged. Bots shoot with scoped spread (spreadFor(..., true)), so their sniper is as before.
+
+(Follow-up 23) Jump pads removed again (they didn't suit the game for now): the generator, World, host / bots / client relay, sound, rings and README are back as before Follow-up 21; the map was rebuilt (same sizes as before them). Follow-up 21 above describes how they worked, should they come back.
+
+(Follow-up 24) Headshot mode is sniper-only (MODES.headshot.weapons ['sniper'], was the rifle); descriptions updated (en / ko). Verified: mode card, buy menu (sniper, free), all 7 bots spawn with the sniper and score kills.

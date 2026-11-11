@@ -14,7 +14,7 @@
 //   the kit; collision reduced to positions only. With a baked lightmap: the
 //   lightmap UVs (TEXCOORD_1) are kept, normal/ORM textures dropped (the game
 //   draws the lightmapped map unlit), and lightmap.png becomes
-//   map_lightmap.ktx2 (UASTC + Zstandard: smooth gradients band in ETC1S).
+//   district_lightmap.ktx2 (UASTC + Zstandard: smooth gradients band in ETC1S).
 // City kit: every piece merged into one library file (city_kit.glb) so
 //   shared textures and materials exist once; textures downsized and
 //   GPU-compressed to KTX2 (Basis Universal), which stays compressed in
@@ -180,8 +180,8 @@ function dropLightingTextures(doc) {
   }
 }
 
-async function encodeLightmap(baked, lightmapSrc) {
-  const lightmapOut = path.join(OUT, 'map_lightmap.ktx2');
+async function encodeLightmap(baked, lightmapSrc, name = MAP_NAME) {
+  const lightmapOut = path.join(OUT, `${name}_lightmap.ktx2`);
   if (baked) {
     const ktx = await encodeToKTX2(new Uint8Array(fs.readFileSync(lightmapSrc)), {
       isUASTC: true, needSupercompression: true, isPerceptual: true, generateMipmap: true, imageDecoder,
@@ -193,15 +193,16 @@ async function encodeLightmap(baked, lightmapSrc) {
   }
 }
 
-async function buildMap() {
-  const visualSrc = path.join(BLENDER_OUT, 'map_visual.glb');
-  const collisionSrc = path.join(BLENDER_OUT, 'map_collision.glb');
+// name: the map's file prefix (see export_map.py).
+async function buildMap(name = MAP_NAME) {
+  const visualSrc = path.join(BLENDER_OUT, `${name}_visual.glb`);
+  const collisionSrc = path.join(BLENDER_OUT, `${name}_collision.glb`);
   if (!fs.existsSync(visualSrc)) return;
 
-  const meta = JSON.parse(fs.readFileSync(path.join(OUT, 'map_meta.json'), 'utf8'));
-  const lightmapSrc = path.join(BLENDER_OUT, 'lightmap.png');
+  const meta = JSON.parse(fs.readFileSync(path.join(OUT, `${name}_meta.json`), 'utf8'));
+  const lightmapSrc = path.join(BLENDER_OUT, `${name}_lightmap.png`);
   const baked = !!meta.lightmap && fs.existsSync(lightmapSrc);
-  if (LIGHTMAP_ONLY) return encodeLightmap(baked, lightmapSrc);
+  if (LIGHTMAP_ONLY) return encodeLightmap(baked, lightmapSrc, name);
 
   const visual = await io.read(visualSrc);
   stripEngineAttributes(visual, baked ? ['TEXCOORD_1'] : []);
@@ -217,9 +218,9 @@ async function buildMap() {
     // The map spans ~260 m: 16-bit positions keep ~4 mm precision (14-bit would crack seams).
     meshopt({ encoder: MeshoptEncoder, level: 'medium', quantizePosition: 16, quantizeTexcoord: 14 }),
   );
-  await write(visual, path.join(OUT, 'map.glb'), fs.statSync(visualSrc).size);
+  await write(visual, path.join(OUT, `${name}.glb`), fs.statSync(visualSrc).size);
 
-  await encodeLightmap(baked, lightmapSrc);
+  await encodeLightmap(baked, lightmapSrc, name);
 
   const collision = await io.read(collisionSrc);
   // Player-only collision (COLP_* objects: window blockers that bullets pass
@@ -236,13 +237,28 @@ async function buildMap() {
   }
   await collision.transform(flatten(), join({ keepNamed: false }), weld(), prune(),
     meshopt({ encoder: MeshoptEncoder, level: 'medium', quantizePosition: 16 }));
-  await write(collision, path.join(OUT, 'map_collision.glb'), fs.statSync(collisionSrc).size);
+  await write(collision, path.join(OUT, `${name}_collision.glb`), fs.statSync(collisionSrc).size);
+
+  // Props (cars, trees, furniture, ...): drawn with real-time light, so no
+  // lightmap UVs; instances flattened and joined by material like the map.
+  const propsSrc = path.join(BLENDER_OUT, `${name}_props.glb`);
+  if (fs.existsSync(propsSrc)) {
+    const props = await io.read(propsSrc);
+    stripEngineAttributes(props);
+    await props.transform(dedup(), flatten(), join({ keepNamed: false }), prune(), ...textureTransforms(),
+      meshopt({ encoder: MeshoptEncoder, level: 'medium', quantizePosition: 16, quantizeTexcoord: 14 }));
+    await write(props, path.join(OUT, `${name}_props.glb`), fs.statSync(propsSrc).size);
+    const prims = props.getRoot().listMeshes().reduce((n, m) => n + m.listPrimitives().length, 0);
+    let tris = 0;
+    for (const m of props.getRoot().listMeshes()) for (const p of m.listPrimitives()) tris += (p.getIndices()?.getCount() ?? 0) / 3;
+    console.log(`${name}_props.glb: ${prims} draw calls, ${(tris / 1000).toFixed(0)}k triangles`);
+  }
 
   const root = visual.getRoot();
   const prims = root.listMeshes().reduce((n, m) => n + m.listPrimitives().length, 0);
   let tris = 0;
   for (const m of root.listMeshes()) for (const p of m.listPrimitives()) tris += (p.getIndices()?.getCount() ?? 0) / 3;
-  console.log(`map.glb: ${prims} draw calls, ${(tris / 1000).toFixed(0)}k triangles, ${root.listTextures().length} textures`);
+  console.log(`${name}.glb: ${prims} draw calls, ${(tris / 1000).toFixed(0)}k triangles, ${root.listTextures().length} textures`);
 }
 
 async function buildCityKit() {
@@ -294,8 +310,9 @@ async function buildCityKit() {
 // --lightmap-only: just re-encode the lightmap (`npm run build:lightmap`).
 // --guns: just the weapons.
 const LIGHTMAP_ONLY = process.argv.includes('--lightmap-only');
+const MAP_NAME = 'district'; // the map's files: district.glb, district_collision.glb, district_meta.json, ...
 const GUNS_ONLY = process.argv.includes('--guns');
-const GUNS = ['rifle.glb', 'sniper.glb', 'pistol.glb', 'revolver.glb', 'p90.glb', 'shotgun.glb'];
+const GUNS = ['rifle.glb', 'sniper.glb', 'pistol.glb', 'revolver.glb', 'p90.glb', 'shotgun.glb', 'knife.glb', 'medkit.glb'];
 if (GUNS_ONLY || process.argv.includes('--anims')) { // --anims: animations + guns
   for (const f of GUNS) await optimizeMesh(f);
   if (!GUNS_ONLY) {
@@ -312,7 +329,7 @@ if (GUNS_ONLY || process.argv.includes('--anims')) { // --anims: animations + gu
     await optimizeAnimations('anims_female.glb');
     await buildCityKit();
   }
-  await buildMap();
+  await buildMap(MAP_NAME);
 }
 
 let before = 0;

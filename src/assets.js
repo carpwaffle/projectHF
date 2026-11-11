@@ -19,6 +19,7 @@ export const assets = {
   clips: {}, // 'male' | 'female' -> { clipName: AnimationClip }
   rifle: null, // gltf scene
   guns: {}, // weapon id -> gltf scene (all but the rifle are skinned: Magazine, Handle, Slide, Drum, Reload... bones)
+  medkit: null, // gltf scene: the heal pack (a first-aid case)
 };
 
 let loader = null;
@@ -41,15 +42,16 @@ function load(webglRenderer, path) {
   return getLoader(webglRenderer).loadAsync(modelUrl(path));
 }
 
-// Characters, animations and the rifle.
+// Characters, animations, the weapons and the heal pack.
 export function loadAssets(webglRenderer) {
   loading ??= (async () => {
-    const gunIds = ['rifle', 'sniper', 'pistol', 'revolver', 'p90', 'shotgun'];
-    const [characters, male, female, guns] = await Promise.all([
+    const gunIds = ['rifle', 'sniper', 'pistol', 'revolver', 'p90', 'shotgun', 'knife'];
+    const [characters, male, female, guns, medkit] = await Promise.all([
       Promise.all(SKINS.map((name) => load(webglRenderer, `characters/${name}.glb`))),
       load(webglRenderer, 'anims_male.glb'),
       load(webglRenderer, 'anims_female.glb'),
       Promise.all(gunIds.map((id) => load(webglRenderer, `${id}.glb`))),
+      load(webglRenderer, 'medkit.glb'),
     ]);
     SKINS.forEach((name, i) => {
       assets.characters[name] = characters[i].scene;
@@ -60,6 +62,7 @@ export function loadAssets(webglRenderer) {
     }
     assets.guns = Object.fromEntries(gunIds.map((id, i) => [id, guns[i].scene]));
     assets.rifle = assets.guns.rifle;
+    assets.medkit = medkit.scene;
     return assets;
   })();
   return loading;
@@ -99,16 +102,20 @@ function softShading(scene) {
   });
 }
 
-// The map: visual scene, collision scene, metadata (spawns, play radius,
-// lightmap info) and the baked lightmap texture (null if the map wasn't baked).
-export async function loadMap(webglRenderer) {
-  const meta = await fetch(modelUrl('map_meta.json')).then((r) => r.json());
-  const [visual, collision, lightmap] = await Promise.all([
-    load(webglRenderer, 'map.glb'),
-    load(webglRenderer, 'map_collision.glb'),
+// The map: visual scene (lightmapped), props (cars, trees, furniture: lit in
+// real time), collision scene, metadata (spawns, play bounds, ...) and the
+// baked lightmap texture (null if the map wasn't baked).
+// name: the files' prefix (tools/export_map.py).
+export async function loadMap(webglRenderer, name = 'district') {
+  const meta = await fetch(modelUrl(`${name}_meta.json`)).then((r) => r.json());
+  const [visual, props, collision, lightmap] = await Promise.all([
+    load(webglRenderer, `${name}.glb`),
+    load(webglRenderer, `${name}_props.glb`),
+    load(webglRenderer, `${name}_collision.glb`),
     meta.lightmap ? loadLightmap(webglRenderer, meta.lightmap.file) : null,
   ]);
-  return { visual: visual.scene, collision: collision.scene, meta, lightmap };
+  softShading(props.scene); // (matte, like the characters)
+  return { visual: visual.scene, props: props.scene, collision: collision.scene, meta, lightmap };
 }
 
 async function loadLightmap(webglRenderer, file) {
