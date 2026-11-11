@@ -1,0 +1,544 @@
+<!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover"><style>:root{color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}html{scroll-padding-top:env(safe-area-inset-top,0px)}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#fff;color:#000}img{max-width:100%}[hidden]:not([hidden=until-found i]){display:none!important}</style></head><body>
+<title>Clock Tower District</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=IBM+Plex+Sans+KR:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: a city planning sheet. One wide plan drawing, then numbered-free reference sections in a single reading column with wide tables. */
+:root {
+  --paper: #eef1f2;
+  --sheet: #f8f9f9;
+  --ink: #17232c;
+  --ink-2: #4a5964;
+  --rule: #c9d1d5;
+  --accent: #d9681e;
+  --blue: #2c68c9;
+  --red: #c8423a;
+  --street: #dfe3e5;
+  --block: #b9c3c9;
+  --block-ink: #17232c;
+  --canal: #8fb8cf;
+  --plaza: #e9dcc4;
+  --under: #7a5ea8;
+  --heal: #2f9a5b;
+  --money: #c99a12;
+  --weapon: #ffffff;
+  --display: "Barlow Condensed", "Arial Narrow", sans-serif;
+  --body: "IBM Plex Sans KR", "Apple SD Gothic Neo", "Malgun Gothic", system-ui, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --paper: #12191e; --sheet: #182128; --ink: #e3e9ec; --ink-2: #9fb0ba; --rule: #2e3b44;
+    --accent: #f08a3e; --blue: #5f95ef; --red: #ee6a60; --street: #222d35; --block: #3d4c57;
+    --block-ink: #e9eef1; --canal: #2e5a72; --plaza: #4a4232; --under: #a88bdb; --heal: #4cc07d;
+    --money: #e2b83a; --weapon: #f4f6f7; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --paper: #12191e; --sheet: #182128; --ink: #e3e9ec; --ink-2: #9fb0ba; --rule: #2e3b44;
+  --accent: #f08a3e; --blue: #5f95ef; --red: #ee6a60; --street: #222d35; --block: #3d4c57;
+  --block-ink: #e9eef1; --canal: #2e5a72; --plaza: #4a4232; --under: #a88bdb; --heal: #4cc07d;
+  --money: #e2b83a; --weapon: #f4f6f7; color-scheme: dark;
+}
+body { background: var(--paper); color: var(--ink); font-family: var(--body); font-size: 15px; line-height: 1.6; }
+.wrap { max-width: 1080px; margin: 0 auto; padding-block: 40px 72px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
+  display: grid; gap: 56px; }
+header { display: grid; gap: 14px; }
+.eyebrow { font-family: var(--mono); font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--accent); }
+h1 { font-family: var(--display); font-weight: 700; font-size: clamp(40px, 7vw, 68px); line-height: 1; margin: 0; letter-spacing: .01em; text-wrap: balance; }
+h1 small { display: block; font-family: var(--body); font-weight: 500; font-size: .36em; color: var(--ink-2); margin-top: 8px; letter-spacing: 0; }
+h2 { font-family: var(--display); font-weight: 600; font-size: 30px; line-height: 1.1; margin: 0; text-wrap: balance; letter-spacing: .01em; }
+h3 { font-size: 15px; font-weight: 600; margin: 0; }
+p { margin: 0; max-width: 68ch; }
+.lede { font-size: 17px; color: var(--ink-2); max-width: 70ch; }
+section { display: grid; gap: 18px; min-width: 0; }
+.facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 1px; background: var(--rule); border: 1px solid var(--rule); }
+.facts div { background: var(--sheet); padding: 12px 14px; display: grid; gap: 2px; }
+.facts b { font-family: var(--display); font-size: 26px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.facts span { font-size: 12px; color: var(--ink-2); }
+.sheet { background: var(--sheet); border: 1px solid var(--rule); padding: 18px; display: grid; gap: 14px; min-width: 0; }
+.scroll { overflow-x: auto; min-width: 0; }
+.plan { display: grid; grid-template-columns: minmax(0, 1fr) 260px; gap: 22px; align-items: start; }
+@media (max-width: 820px) { .plan { grid-template-columns: 1fr; } }
+.plan svg { width: 100%; height: auto; min-width: 520px; display: block; }
+.legend { display: grid; gap: 8px; font-size: 13px; }
+.legend div { display: grid; grid-template-columns: 22px 1fr; gap: 8px; align-items: center; }
+.sw { width: 22px; height: 14px; border: 1px solid var(--ink-2); }
+.dot { width: 12px; height: 12px; border-radius: 50%; border: 1.5px solid var(--ink); justify-self: center; }
+.legend h3 { margin-top: 6px; font-family: var(--mono); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--ink-2); font-weight: 500; }
+table { border-collapse: collapse; width: 100%; font-size: 13.5px; min-width: 640px; }
+th, td { text-align: left; vertical-align: top; padding: 9px 10px; border-bottom: 1px solid var(--rule); }
+th { font-family: var(--mono); font-size: 11px; letter-spacing: .07em; text-transform: uppercase; color: var(--ink-2); font-weight: 500; border-bottom: 1.5px solid var(--ink-2); }
+td.num { font-family: var(--mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
+td .ko { color: var(--ink-2); display: block; font-size: 12.5px; }
+.tag { display: inline-block; font-family: var(--mono); font-size: 11px; padding: 1px 6px; border: 1px solid var(--rule); white-space: nowrap; }
+.tag.blue { color: var(--blue); border-color: var(--blue); }
+.tag.red { color: var(--red); border-color: var(--red); }
+.tag.mid { color: var(--accent); border-color: var(--accent); }
+.cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 18px; }
+.cols > div { display: grid; gap: 8px; align-content: start; min-width: 0; }
+ul { margin: 0; padding-left: 20px; display: grid; gap: 6px; max-width: 70ch; }
+.note { font-size: 13px; color: var(--ink-2); }
+.chart svg { width: 100%; min-width: 620px; height: auto; display: block; }
+code { font-family: var(--mono); font-size: .9em; }
+a { color: var(--accent); }
+a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.sources { font-size: 13px; color: var(--ink-2); }
+.sources ul { gap: 4px; }
+
+/* SVG plan styling (all units in metres) */
+.p-bound { fill: var(--block); opacity: .45; }
+.p-street { fill: var(--street); }
+.p-canal { fill: var(--canal); }
+.p-bridge { fill: var(--street); stroke: var(--ink-2); stroke-width: .3; }
+.p-block { fill: var(--block); stroke: var(--ink); stroke-width: .35; }
+.p-blue { fill: var(--block); stroke: var(--blue); stroke-width: .9; }
+.p-red { fill: var(--block); stroke: var(--red); stroke-width: .9; }
+.p-plaza { fill: var(--plaza); stroke: var(--ink-2); stroke-width: .25; }
+.p-tower { fill: var(--accent); stroke: var(--ink); stroke-width: .35; }
+.p-open { fill: var(--street); stroke: var(--ink); stroke-width: .35; stroke-dasharray: 1 .7; }
+.p-sky { fill: none; stroke: var(--ink); stroke-width: .35; stroke-dasharray: 1.2 .6; }
+.p-under { fill: none; stroke: var(--under); stroke-width: .55; stroke-dasharray: 1.4 .8; }
+.p-stairs { fill: var(--under); opacity: .75; }
+.p-stall { fill: var(--block); opacity: .8; }
+.p-cover { fill: var(--ink-2); }
+.p-label { fill: var(--block-ink); font-family: var(--body); font-size: 2.1px; font-weight: 600; text-anchor: middle; }
+.p-ko { fill: var(--block-ink); font-family: var(--body); font-size: 1.7px; text-anchor: middle; opacity: .8; }
+.p-small { fill: var(--ink-2); font-family: var(--mono); font-size: 1.6px; text-anchor: middle; }
+.p-lane { fill: var(--ink-2); font-family: var(--display); font-size: 2.6px; font-weight: 600; letter-spacing: .15px; text-anchor: middle; }
+.p-sight { stroke: var(--accent); stroke-width: .5; stroke-dasharray: 1.6 .8; fill: none; }
+.p-sight-l { fill: var(--accent); font-family: var(--mono); font-size: 1.7px; font-weight: 500; }
+.p-jib { stroke: var(--ink); stroke-width: .6; }
+.m-weapon { fill: var(--weapon); stroke: var(--ink); stroke-width: .35; }
+.m-heal { fill: var(--heal); stroke: var(--ink); stroke-width: .35; }
+.m-money { fill: var(--money); stroke: var(--ink); stroke-width: .35; }
+.p-team-b { fill: var(--blue); font-family: var(--display); font-weight: 700; font-size: 2.6px; text-anchor: middle; }
+.p-team-r { fill: var(--red); font-family: var(--display); font-weight: 700; font-size: 2.6px; text-anchor: middle; }
+.p-arrow { stroke: var(--ink); stroke-width: .45; fill: none; marker-end: url(#arr); }
+
+/* Height chart */
+.h-grid { stroke: var(--rule); stroke-width: 1; }
+.h-zero { stroke: var(--ink); stroke-width: 1.4; }
+.h-axis { fill: var(--ink-2); font-family: var(--mono); font-size: 11px; }
+.h-bar { fill: var(--block); stroke: var(--ink); stroke-width: 1; }
+.h-bar.snipe { fill: var(--accent); }
+.h-bar.low { fill: var(--under); }
+.h-name { fill: var(--ink); font-family: var(--body); font-size: 11.5px; }
+.h-val { fill: var(--ink); font-family: var(--mono); font-size: 11px; text-anchor: middle; }
+.h-ceil { stroke: var(--red); stroke-width: 1.4; stroke-dasharray: 6 4; }
+.h-ceil-l { fill: var(--red); font-family: var(--mono); font-size: 11px; }
+</style>
+
+<div class="wrap">
+
+<header>
+  <div class="eyebrow">Hack FPS · Map blueprint · v3 proposal</div>
+  <h1>Clock Tower District<small>시계탑 지구 · a city map with named landmarks, three lanes and real sniper lanes</small></h1>
+  <p class="lede">A replacement for the current Downtown map. Every building is a named landmark you can call out ("Hospital roof", "Crane", "Subway"), the map runs on three lanes with an underground and a rooftop layer, and there are four sniper perches built as duels, each with its own counter-perch. Blue spawns in the north, Red in the south, and the layout is mirrored across the middle so neither team has an advantage.</p>
+  <div class="facts">
+    <div><b>96 × 128 m</b><span>Playable 88 × 120 m (now: a 97 m circle)</span></div>
+    <div><b>3 lanes + 2 layers</b><span>Canal · Main Street · Market Alley; Subway below, rooftops above</span></div>
+    <div><b>−4.5 to 20 m</b><span>Subway floor to the Clock Tower top</span></div>
+    <div><b>8 s / 18 s</b><span>Spawn to plaza / spawn to enemy spawn, walking at 5.5 m/s</span></div>
+    <div><b>≤ 30 draw calls</b><span>About 2 × today (14), still light for the browser</span></div>
+  </div>
+</header>
+
+<section>
+  <h2>Plan</h2>
+  <p>North is up. Blue (north) and Red (south) halves are mirror images, so each building has a twin of the same shape and height. The twins look different and have different names (Hospital ↔ Hotel, Bank ↔ Police Station), so a callout always means exactly one place. The centre row has one-of-a-kind landmarks that both teams fight over.</p>
+  <div class="sheet plan">
+    <div class="scroll">
+    <svg viewBox="-52 -68 104 136" role="img" aria-label="Top-down plan of the Clock Tower District map">
+      <defs>
+        <marker id="arr" viewBox="0 0 4 4" refX="3" refY="2" markerWidth="4" markerHeight="4" orient="auto"><path d="M0,0 L4,2 L0,4 z" fill="currentColor" style="fill: var(--ink)"/></marker>
+      </defs>
+      <!-- boundary facades and streets -->
+      <rect class="p-bound" x="-48" y="-64" width="96" height="128"/>
+      <rect class="p-street" x="-44" y="-60" width="88" height="120"/>
+      <!-- canal -->
+      <rect class="p-canal" x="-40" y="-60" width="9" height="120"/>
+      <rect class="p-cover" x="-38" y="-28" width="4" height="7" opacity=".6"/>
+      <rect class="p-cover" x="-38" y="21" width="4" height="7" opacity=".6"/>
+      <rect class="p-bridge" x="-40" y="-4" width="9" height="8"/>
+      <rect class="p-stairs" x="-32.5" y="-46" width="1.5" height="4"/>
+      <rect class="p-stairs" x="-32.5" y="42" width="1.5" height="4"/>
+      <rect class="p-stairs" x="-40" y="-18" width="1.5" height="4"/>
+      <rect class="p-stairs" x="-40" y="14" width="1.5" height="4"/>
+      <text class="p-lane" transform="translate(-35.5 -50) rotate(-90)">CANAL · 운하</text>
+      <text class="p-lane" transform="translate(-35.5 50) rotate(-90)">CANAL · 운하</text>
+
+      <!-- bases -->
+      <rect class="p-blue" x="-27" y="-60" width="52" height="14"/>
+      <text class="p-label" x="-1" y="-54">Central Station</text>
+      <text class="p-ko" x="-1" y="-51.6">중앙역</text>
+      <text class="p-team-b" x="-1" y="-48.2">BLUE SPAWN · 2F</text>
+      <rect class="p-red" x="-27" y="46" width="52" height="14"/>
+      <text class="p-label" x="-1" y="52">City Hall</text>
+      <text class="p-ko" x="-1" y="54.4">시청</text>
+      <text class="p-team-r" x="-1" y="57.8">RED SPAWN · 2F</text>
+      <!-- spawn exits -->
+      <path class="p-arrow" d="M-27 -50 L-30.5 -50"/>
+      <path class="p-arrow" d="M25 -50 L28.5 -50"/>
+      <path class="p-arrow" d="M-8 -46 L-8 -42.5"/>
+      <path class="p-arrow" d="M-27 50 L-30.5 50"/>
+      <path class="p-arrow" d="M25 50 L28.5 50"/>
+      <path class="p-arrow" d="M6 46 L6 42.5"/>
+      <text class="p-small" x="0" y="-42.4">North Ave · 북쪽 대로</text>
+      <text class="p-small" x="0" y="43.6">South Ave · 남쪽 대로</text>
+
+      <!-- west row: Hospital / Hotel -->
+      <rect class="p-block" x="-27" y="-38" width="16" height="22"/>
+      <text class="p-label" x="-19" y="-28">Hospital</text>
+      <text class="p-ko" x="-19" y="-25.6">병원 · 5F</text>
+      <rect class="p-block" x="-27" y="16" width="16" height="22"/>
+      <text class="p-label" x="-19" y="26">Hotel</text>
+      <text class="p-ko" x="-19" y="28.4">호텔 · 5F</text>
+
+      <!-- Main Street -->
+      <text class="p-lane" transform="translate(0 -24) rotate(-90)">MAIN ST · 중앙로</text>
+      <text class="p-lane" transform="translate(0 24) rotate(-90)">MAIN ST · 중앙로</text>
+      <rect class="p-cover" x="-6" y="-21" width="3.5" height="1"/>
+      <rect class="p-cover" x="2.5" y="-15" width="3.5" height="1"/>
+      <rect class="p-cover" x="-6" y="20" width="3.5" height="1"/>
+      <rect class="p-cover" x="2.5" y="14" width="3.5" height="1"/>
+      <!-- skybridges -->
+      <rect class="p-sky" x="-11" y="-35" width="22" height="3"/>
+      <text class="p-small" x="0" y="-36">skybridge 3F (6 m)</text>
+      <rect class="p-sky" x="-11" y="32" width="22" height="3"/>
+      <text class="p-small" x="0" y="37.6">skybridge 3F (6 m)</text>
+
+      <!-- Bank / Police -->
+      <rect class="p-block" x="11" y="-38" width="14" height="20"/>
+      <text class="p-label" x="18" y="-30">Bank</text>
+      <text class="p-ko" x="18" y="-27.6">은행 · 3F</text>
+      <rect class="p-block" x="11" y="18" width="14" height="20"/>
+      <text class="p-label" x="18" y="28">Police Station</text>
+      <text class="p-ko" x="18" y="30.4">경찰서 · 3F</text>
+
+      <!-- Market alley -->
+      <rect class="p-stall" x="25" y="-36" width="2.5" height="4"/>
+      <rect class="p-stall" x="28.5" y="-28" width="2.5" height="4"/>
+      <rect class="p-stall" x="25" y="-20" width="2.5" height="4"/>
+      <rect class="p-stall" x="25" y="32" width="2.5" height="4"/>
+      <rect class="p-stall" x="28.5" y="24" width="2.5" height="4"/>
+      <rect class="p-stall" x="25" y="16" width="2.5" height="4"/>
+      <text class="p-lane" transform="translate(28 -9) rotate(-90)" style="font-size:2px">MARKET ALLEY</text>
+      <text class="p-lane" transform="translate(28 9) rotate(90)" style="font-size:2px">시장 골목</text>
+
+      <!-- Warehouse / Factory -->
+      <rect class="p-block" x="31" y="-40" width="13" height="26"/>
+      <text class="p-label" x="37.5" y="-24">Warehouse</text>
+      <text class="p-ko" x="37.5" y="-21.6">창고 · 9 m hall</text>
+      <rect class="p-block" x="31" y="14" width="13" height="26"/>
+      <text class="p-label" x="37.5" y="23">Factory</text>
+      <text class="p-ko" x="37.5" y="25.4">공장 · 9 m hall</text>
+
+      <!-- centre row -->
+      <rect class="p-plaza" x="-11" y="-12" width="22" height="24"/>
+      <rect class="p-stairs" x="4" y="-10" width="4" height="3"/>
+      <rect class="p-stairs" x="4" y="7" width="4" height="3"/>
+      <circle cx="-6" cy="0" r="2.2" class="p-cover" opacity=".5"/>
+      <text class="p-small" x="-6" y="3.9">fountain</text>
+      <rect class="p-tower" x="-2.5" y="-2.5" width="5" height="5"/>
+      <text class="p-label" x="0" y="-6.5">Clock Tower</text>
+      <text class="p-ko" x="0" y="-4.3">시계탑 · 14 m / 20 m</text>
+      <text class="p-small" x="0" y="11.2">PLAZA · 광장</text>
+
+      <rect class="p-block" x="-24" y="-6" width="10" height="12"/>
+      <text class="p-label" x="-19" y="-0.6">Subway</text>
+      <text class="p-ko" x="-19" y="1.8">지하철역</text>
+      <rect class="p-under" x="-24" y="-4" width="52" height="8"/>
+      <text class="p-small" x="-6" y="-8.5" style="fill: var(--under)">subway concourse −4.5 m</text>
+      <text class="p-small" x="-21" y="-10" style="text-anchor:middle">Bridge St</text>
+      <text class="p-small" x="-35.5" y="7">Canal Bridge</text>
+
+      <rect class="p-open" x="11" y="-10" width="14" height="20"/>
+      <text class="p-label" x="18" y="-5.5">Construction</text>
+      <text class="p-ko" x="18" y="-3.2">공사장 · open 3F frame</text>
+      <line class="p-jib" x1="24" y1="0" x2="4" y2="0"/>
+      <rect x="17" y="-1" width="2" height="2" style="fill: var(--ink)"/>
+      <text class="p-small" x="18" y="4.2">Crane 크레인 · cab 18 m</text>
+
+      <rect class="p-block" x="31" y="-10" width="13" height="20"/>
+      <text class="p-label" x="37.5" y="-1">Market Hall</text>
+      <text class="p-ko" x="37.5" y="1.4">시장 · 2F</text>
+
+      <!-- sightlines -->
+      <line class="p-sight" x1="-20" y1="-17" x2="-36" y2="58"/>
+      <text class="p-sight-l" x="-33.6" y="40">S1</text>
+      <line class="p-sight" x1="-26" y1="-37" x2="-26" y2="37"/>
+      <text class="p-sight-l" x="-29.4" y="-10">S2</text>
+      <line class="p-sight" x1="0" y1="-2.5" x2="5" y2="-40"/>
+      <line class="p-sight" x1="0" y1="2.5" x2="-5" y2="40"/>
+      <text class="p-sight-l" x="3.9" y="-30">S3</text>
+      <line class="p-sight" x1="18" y1="0" x2="28" y2="-38"/>
+      <line class="p-sight" x1="18" y1="0" x2="28" y2="38"/>
+      <text class="p-sight-l" x="24.4" y="-26">S4</text>
+      <line class="p-sight" x1="10" y1="-20" x2="10" y2="20"/>
+      <text class="p-sight-l" x="8.2" y="-14">S5</text>
+
+      <!-- pickups -->
+      <circle class="m-weapon" cx="-35.5" cy="5.5" r="1"/>
+      <circle class="m-weapon" cx="-11" cy="0" r="1"/>
+      <circle class="m-weapon" cx="37.5" cy="-6" r="1"/>
+      <circle class="m-weapon" cx="14" cy="-7" r="1"/>
+      <circle class="m-weapon" cx="-15" cy="-33" r="1"/>
+      <circle class="m-weapon" cx="-15" cy="33" r="1"/>
+      <circle class="m-weapon" cx="22" cy="-35" r="1"/>
+      <circle class="m-weapon" cx="22" cy="35" r="1"/>
+      <circle class="m-weapon" cx="41" cy="-31" r="1"/>
+      <circle class="m-weapon" cx="41" cy="31" r="1"/>
+      <circle class="m-heal" cx="-24" cy="-20" r="1"/>
+      <circle class="m-heal" cx="-24" cy="20" r="1"/>
+      <circle class="m-heal" cx="-21.5" cy="3.8" r="1"/>
+      <circle class="m-heal" cx="41" cy="6.5" r="1"/>
+      <circle class="m-money" cx="1.6" cy="1.6" r="1"/>
+      <circle class="m-money" cx="20.6" cy="-1.6" r="1"/>
+      <circle class="m-money" cx="41.5" cy="-37.5" r="1"/>
+      <circle class="m-money" cx="41.5" cy="37.5" r="1"/>
+
+      <!-- compass + scale -->
+      <text class="p-small" x="-46" y="-65.5" style="text-anchor:start">N ↑</text>
+      <line x1="30" y1="-65.5" x2="46" y2="-65.5" style="stroke: var(--ink); stroke-width: .4"/>
+      <text class="p-small" x="38" y="-66.3">16 m</text>
+    </svg>
+    </div>
+    <div class="legend">
+      <h3>Ground</h3>
+      <div><span class="sw" style="background: var(--street)"></span><span>Street, quay, alley (0 m)</span></div>
+      <div><span class="sw" style="background: var(--canal)"></span><span>Canal bed (−2.5 m, walkable, dry)</span></div>
+      <div><span class="sw" style="background: var(--plaza)"></span><span>Plaza</span></div>
+      <div><span class="sw" style="background: var(--block)"></span><span>Building (enterable unless noted)</span></div>
+      <div><span class="sw" style="background: var(--block); border: 2px solid var(--blue)"></span><span>Team base, spawn rooms upstairs</span></div>
+      <div><span class="sw" style="background: var(--street); border: 1px dashed var(--ink)"></span><span>Open frame, no walls (Construction)</span></div>
+      <div><span class="sw" style="background: transparent; border: 2px dashed var(--under)"></span><span>Underground (Subway, −4.5 m)</span></div>
+      <div><span class="sw" style="background: var(--under); opacity: .75"></span><span>Stairs or ramp between levels</span></div>
+      <h3>Pickups (as today)</h3>
+      <div><span class="dot" style="background: var(--weapon)"></span><span>Weapon spot (10)</span></div>
+      <div><span class="dot" style="background: var(--heal)"></span><span>Heal pack (4)</span></div>
+      <div><span class="dot" style="background: var(--money)"></span><span>Money, $1,000 (4, all at risky perches)</span></div>
+      <h3>Lines</h3>
+      <div><span class="sw" style="border: none; border-top: 2px dashed var(--accent); height: 0"></span><span>Sniper sightline S1–S5 (table below)</span></div>
+      <div><span class="sw" style="border: none; border-top: 2px solid var(--ink); height: 0"></span><span>Crane jib over the plaza</span></div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>Callouts</h2>
+  <p>This answers the first piece of tester feedback. Each place has one short name that works in English and Korean. Each building also gets its own colour, material and rooftop sign, so you can tell where you are from far away. The game shows the name too (see "Callouts in the game" below).</p>
+  <div class="sheet scroll">
+    <table>
+      <thead><tr><th>Callout</th><th>Where</th><th>Look (how you recognise it)</th><th>What happens there</th></tr></thead>
+      <tbody>
+        <tr><td>Clock Tower<span class="ko">시계탑</span></td><td><span class="tag mid">centre</span></td><td>Stone tower with lit clock faces, visible from everywhere</td><td>Main high point. Inside stair to a 14 m balcony, ladder to the 20 m top (money spot). Strong position, but you can be shot from every side</td></tr>
+        <tr><td>Plaza<span class="ko">광장</span></td><td><span class="tag mid">centre</span></td><td>Paved square, fountain, benches, two subway stairways</td><td>Where Main Street meets the middle. Mid-range fights, fountain for cover</td></tr>
+        <tr><td>Subway<span class="ko">지하철역</span></td><td><span class="tag mid">centre, below</span></td><td>Glass entrance building west of the plaza; tiled concourse with pillars</td><td>Underground shortcut from the Canal to Construction, passing under the Plaza. Short-range fights; a safe crossing between lanes</td></tr>
+        <tr><td>Canal / Canal Bridge<span class="ko">운하 / 운하 다리</span></td><td><span class="tag">west lane</span></td><td>Dry stone channel with moored barges; arched bridge in the middle</td><td>The long lane. Barges and the bridge split the canal bed into shorter stretches; the main sniper lines pass high above it</td></tr>
+        <tr><td>Construction / Crane<span class="ko">공사장 / 크레인</span></td><td><span class="tag mid">centre east</span></td><td>Bare concrete frame, scaffolding, yellow tower crane</td><td>Vertical close fights across 3 open floors. Ladder up the crane mast to the cab (sniper perch and money spot)</td></tr>
+        <tr><td>Market Hall / Market Alley<span class="ko">시장 / 시장 골목</span></td><td><span class="tag">east lane</span></td><td>Coloured awnings, stalls, hanging signs; covered 2F market hall</td><td>Short sightlines and lots of corners: shotgun and P90 territory</td></tr>
+        <tr><td>Main Street<span class="ko">중앙로</span></td><td><span class="tag">mid lane</span></td><td>16 m road, bus shelters, parked cars, skybridges overhead</td><td>Medium range for rifles. The Bank and Police Station windows look down on it</td></tr>
+        <tr><td>Central Station<span class="ko">중앙역</span></td><td><span class="tag blue">Blue base</span></td><td>Glass arched roof, departure board</td><td>Blue spawns upstairs; 3 exits, one for each lane</td></tr>
+        <tr><td>City Hall<span class="ko">시청</span></td><td><span class="tag red">Red base</span></td><td>White columns and a dome</td><td>Red spawns upstairs; 3 exits, one for each lane</td></tr>
+        <tr><td>Hospital ↔ Hotel<span class="ko">병원 ↔ 호텔</span></td><td><span class="tag blue">north</span> <span class="tag red">south</span></td><td>White with a red cross ↔ cream with gold lettering</td><td>5F with a roof. Each team's own sniper perch over the Canal. Heal pack in each lobby</td></tr>
+        <tr><td>Bank ↔ Police Station<span class="ko">은행 ↔ 경찰서</span></td><td><span class="tag blue">north</span> <span class="tag red">south</span></td><td>Grey stone and columns ↔ navy with a blue-and-white stripe</td><td>3F windows over Main Street; skybridge to the Hospital / Hotel</td></tr>
+        <tr><td>Warehouse ↔ Factory<span class="ko">창고 ↔ 공장</span></td><td><span class="tag blue">north</span> <span class="tag red">south</span></td><td>Green corrugated metal, loading doors ↔ rust-red brick with a chimney</td><td>9 m tall hall with containers or machines and catwalks at 4.5 m. Fights on two levels at once</td></tr>
+        <tr><td>North Ave / South Ave<span class="ko">북쪽 대로 / 남쪽 대로</span></td><td><span class="tag blue">north</span> <span class="tag red">south</span></td><td>Wide street in front of each base</td><td>Each team's back route between lanes</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section>
+  <h2>Sniping</h2>
+  <p>This answers the second piece of tester feedback. Every perch is built as a duel. Each one can be seen from at least one other perch and has at least two ways up, so a sniper is never safe for long. No sightline reaches a spawn exit. The longest lines are 70–77 m. Today's map is 97 m across, and buildings cut most lines well short of that.</p>
+  <div class="sheet scroll">
+    <table>
+      <thead><tr><th>Line</th><th>Perch → target</th><th>Length</th><th>Height</th><th>Counterplay</th></tr></thead>
+      <tbody>
+        <tr><td><b>S1</b></td><td>Hospital roof → down the Canal (and Hotel roof → up it)</td><td class="num">~76 m</td><td class="num">15 m</td><td>The enemy's own roof is the counter-sniper. Flank by the roof's inside stairs or its outside fire escape</td></tr>
+        <tr><td><b>S2</b></td><td>Hospital roof ↔ Hotel roof (west edges)</td><td class="num">34–74 m</td><td class="num">15 ↔ 15 m</td><td>The main sniper duel, like 2Fort's battlements: equal height, equal cover, low parapets with gaps</td></tr>
+        <tr><td><b>S3</b></td><td>Clock Tower balcony → both halves of Main Street</td><td class="num">~38 m</td><td class="num">14 m</td><td>Seen from both roofs, the crane, and Bank / Police windows. One stairway up, so attackers can trap you. Strong but risky</td></tr>
+        <tr><td><b>S4</b></td><td>Crane cab → Market Alley and the Plaza</td><td class="num">~39 m</td><td class="num">18 m</td><td>No cover in the cab; ladder only (players hear the climb). Clock Tower and both roofs can see the cab</td></tr>
+        <tr><td><b>S5</b></td><td>Bank 3F windows ↔ Police 3F windows</td><td class="num">~40 m</td><td class="num">6 m</td><td>A rifle duel just past the tower. 0.8 m sills like today's windows; reached by the skybridge or the inside stairs</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <ul>
+    <li><b>No sightline into a spawn.</b> Each base's exits face sideways into its back avenue, behind an arcade, so a new player isn't shot from across the map.</li>
+    <li><b>Lane widths set the weapon.</b> Canal and rooftops for the sniper (50–77 m). Main Street and the Plaza for rifles (20–40 m). Subway, Market and the Warehouse / Factory for P90 and shotgun (under 15 m).</li>
+    <li><b>Snipers are needed in fights.</b> Every high perch overlooks somewhere players have to cross: the Canal Bridge, the Plaza, or the market entrances. Snipers have targets without being able to lock down a whole lane.</li>
+  </ul>
+</section>
+
+<section>
+  <h2>Verticality</h2>
+  <p>There are three height layers, and there are ways between them in every lane. That way, height is something you climb to during a fight, not a separate area. Every high point has at least two ways up (Overwatch's rule for high ground). Some extra routes open only with hacks, which makes hacks worth buying.</p>
+  <div class="sheet chart scroll">
+    <svg viewBox="0 0 900 360" role="img" aria-label="Heights of the main standing surfaces, from minus 4.5 to 20 metres">
+      <!-- scale: y = 290 - h*10 ; 0 m at 290 ; 25 m at 40 ; -5 m at 340 -->
+      <g>
+        <line class="h-grid" x1="60" x2="890" y1="240" y2="240"/><text class="h-axis" x="50" y="244" text-anchor="end">5 m</text>
+        <line class="h-grid" x1="60" x2="890" y1="190" y2="190"/><text class="h-axis" x="50" y="194" text-anchor="end">10 m</text>
+        <line class="h-grid" x1="60" x2="890" y1="140" y2="140"/><text class="h-axis" x="50" y="144" text-anchor="end">15 m</text>
+        <line class="h-grid" x1="60" x2="890" y1="90" y2="90"/><text class="h-axis" x="50" y="94" text-anchor="end">20 m</text>
+        <line class="h-grid" x1="60" x2="890" y1="335" y2="335"/><text class="h-axis" x="50" y="339" text-anchor="end">−4.5</text>
+        <line class="h-zero" x1="60" x2="890" y1="290" y2="290"/><text class="h-axis" x="50" y="294" text-anchor="end">0 m</text>
+        <line class="h-ceil" x1="60" x2="890" y1="40" y2="40"/><text class="h-ceil-l" x="66" y="34">Fly hack ceiling 25 m: above every roof, so flyers can't be shot from directly above</text>
+      </g>
+      <!-- bars: x step 75, width 44 -->
+      <rect class="h-bar low" x="78" y="290" width="44" height="45"/><text class="h-val" x="100" y="352">−4.5</text>
+      <rect class="h-bar low" x="153" y="290" width="44" height="25"/><text class="h-val" x="175" y="330">−2.5</text>
+      <rect class="h-bar" x="228" y="262" width="44" height="28"/><text class="h-val" x="250" y="256">2.8</text>
+      <rect class="h-bar" x="303" y="245" width="44" height="45"/><text class="h-val" x="325" y="239">4.5</text>
+      <rect class="h-bar" x="378" y="229" width="44" height="61"/><text class="h-val" x="400" y="223">6.15</text>
+      <rect class="h-bar" x="453" y="199" width="44" height="91"/><text class="h-val" x="475" y="193">9.15</text>
+      <rect class="h-bar" x="528" y="199" width="44" height="91"/><text class="h-val" x="550" y="193">9.15</text>
+      <rect class="h-bar snipe" x="603" y="139" width="44" height="151"/><text class="h-val" x="625" y="133">15.15</text>
+      <rect class="h-bar snipe" x="678" y="150" width="44" height="140"/><text class="h-val" x="700" y="144">14</text>
+      <rect class="h-bar" x="678" y="90" width="44" height="60" style="opacity:.55"/><text class="h-val" x="700" y="84">20</text>
+      <rect class="h-bar snipe" x="753" y="110" width="44" height="180"/><text class="h-val" x="775" y="104">18</text>
+      <!-- names (rotated to fit) -->
+      <g>
+        <text class="h-name" transform="translate(100 282) rotate(-90)" text-anchor="start" style="fill: var(--sheet); font-weight:600" dx="-38">Subway</text>
+        <text class="h-name" transform="translate(175 286) rotate(-90)" style="fill: var(--sheet); font-weight:600" dx="-22">Canal</text>
+        <text class="h-name" transform="translate(254 286) rotate(-90)">Stalls</text>
+        <text class="h-name" transform="translate(329 286) rotate(-90)">Catwalks</text>
+        <text class="h-name" transform="translate(404 286) rotate(-90)">Skybridge</text>
+        <text class="h-name" transform="translate(479 286) rotate(-90)">Bank / Police</text>
+        <text class="h-name" transform="translate(554 286) rotate(-90)">Construction</text>
+        <text class="h-name" transform="translate(629 286) rotate(-90)">Hospital / Hotel</text>
+        <text class="h-name" transform="translate(704 286) rotate(-90)">Clock Tower</text>
+        <text class="h-name" transform="translate(779 286) rotate(-90)">Crane cab</text>
+      </g>
+      <text class="h-axis" x="820" y="200">orange =</text>
+      <text class="h-axis" x="820" y="214">sniper perch</text>
+    </svg>
+  </div>
+  <div class="cols">
+    <div>
+      <h3>Below street level</h3>
+      <ul>
+        <li><b>Subway (−4.5 m):</b> one E–W tunnel from the Canal to Construction, under the Plaza. Four ways in: the Subway building, 2 Plaza stairways, and Construction.</li>
+        <li><b>Canal (−2.5 m):</b> 4 ramps out. Players in the canal bed are hard to hit from street level but easy targets from the roofs.</li>
+      </ul>
+    </div>
+    <div>
+      <h3>Above the street</h3>
+      <ul>
+        <li><b>Skybridges (3F)</b> link the Hospital and Bank (Hotel and Police Station in the south) over Main Street. Players walk across, and the bridges also hide each base from the Clock Tower.</li>
+        <li><b>Warehouse / Factory catwalks</b> run around a 9 m hall above the containers: two levels in one room, like Nuke.</li>
+        <li><b>Construction</b> is open-sided: you can be shot from the Plaza while climbing the scaffolding.</li>
+      </ul>
+    </div>
+    <div>
+      <h3>Hack routes</h3>
+      <ul>
+        <li><b>Speed hack (3.1 m jump):</b> jump straight out of the canal without the ramps, onto market stall roofs and up to Market Hall 2F windows, and onto Construction 2F without the scaffolding.</li>
+        <li><b>Fly hack:</b> reaches the Clock Tower top and the crane cab without the ladder, at the cost of hanging in open air.</li>
+        <li><b>No-clip:</b> the Subway's floor and walls stay solid, so no-clip can't drop you anywhere hidden.</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>What we took from other maps</h2>
+  <p>Popular FPS maps share a few traits. Players can always tell where they are, each kind of fight has a place of its own, and every strong position has a known counter. Below, each source and the idea it gave this map.</p>
+  <div class="sheet scroll">
+    <table>
+      <thead><tr><th>Map</th><th>Why players love it</th><th>Taken for Clock Tower District</th></tr></thead>
+      <tbody>
+        <tr><td>Dust 2<span class="ko">Counter-Strike</span></td><td>A clean three-lane layout with simple, readable geometry, so fights come down to aim. Its callouts ("Long", "Catwalk", "Mid doors") are known by every player. Mid doors is a famous AWP duel.</td><td>Three lanes with one connector each; a planned sniper duel (S2); short, obvious names</td></tr>
+        <tr><td>Mirage<span class="ko">Counter-Strike</span></td><td>Connector routes between lanes, and a sniper "Window" that is strong but can be shot from several angles.</td><td>Bank / Police windows (S5); a perch is never safe from every side</td></tr>
+        <tr><td>Inferno<span class="ko">Counter-Strike</span></td><td>"Banana" is a narrow, twisting lane with lots of corners, which contrasts with the open areas.</td><td>Market Alley is our close-range lane</td></tr>
+        <tr><td>Nuke<span class="ko">Counter-Strike</span></td><td>Two levels stacked on top of each other, with vents and ladders between them. Fights happen above and below you at once.</td><td>The Subway under the Plaza; Warehouse / Factory catwalks</td></tr>
+        <tr><td>Lockout, The Pit<span class="ko">Halo 2 / 3</span></td><td>One central structure pulls everyone toward the middle. Upper floors control the sightlines, and the best pickups sit in risky spots.</td><td>The Clock Tower as the centre point; money placed at the riskiest perches</td></tr>
+        <tr><td>Highrise, Crash, Rust<span class="ko">Call of Duty</span></td><td>Rooftop and crane perches overlook the lanes, and Crash's tall building can be attacked from several sides. Pros say good maps stay true to three lanes.</td><td>The Crane; Hospital / Hotel roofs with stairs and a fire escape</td></tr>
+        <tr><td>2Fort<span class="ko">Team Fortress 2</span></td><td>Two identical bases face each other, and the battlements make a sniper duel that everyone remembers.</td><td>Mirrored halves; the Hospital-to-Hotel roof duel</td></tr>
+        <tr><td>Ascent, Haven<span class="ko">Valorant</span></td><td>Every spot is named, the names appear on the in-game minimap, and each area looks different.</td><td>Callout names shown on the HUD and minimap; each building has its own colour and sign</td></tr>
+        <tr><td>King's Row, Ilios<span class="ko">Overwatch</span></td><td>High ground everywhere, and side routes so teams can flank.</td><td>Two ways up to every high point; the North / South Ave back routes</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section>
+  <h2>Callouts in the game</h2>
+  <p>Named buildings help, but the game should also show the names. This is cheap to build.</p>
+  <ul>
+    <li><b>Location under the minimap:</b> e.g. "병원 · 4F" or "Hospital · 4F". Zone outlines are exported from Blender to <code>map_meta.json</code>, and the game checks which outline the player stands in. This adds no draw calls.</li>
+    <li><b>Teammates' locations</b> on the scoreboard (Tab) and as faint labels on the minimap, which the map hack already shows.</li>
+    <li><b>Kill feed with the place:</b> "carp → bot3 (Crane)". The host already sends feed keys, so this adds one field.</li>
+    <li><b>Rooftop signs</b> with an icon and the name in Korean and English. They all come from one texture, so the signs cost one draw call.</li>
+    <li><b>A different outline for each building</b> (station arch, city hall dome, factory chimney, crane, clock tower), so you can tell where you are from the skyline alone.</li>
+  </ul>
+</section>
+
+<section>
+  <h2>Performance budget</h2>
+  <p>The map has more area and more detail than today's, so it needs a firm budget. All numbers are compared with the current Downtown map.</p>
+  <div class="sheet scroll">
+    <table>
+      <thead><tr><th>Item</th><th>Today</th><th>Budget</th><th>How</th></tr></thead>
+      <tbody>
+        <tr><td>Draw calls</td><td class="num">14</td><td class="num">≤ 30</td><td>Merge everything by material, then split into 4 quarters plus the Subway, so the browser can skip quarters that are off screen</td></tr>
+        <tr><td>Triangles</td><td class="num">105–140k</td><td class="num">≤ 180k</td><td>Only enterable buildings have interiors; the boundary buildings are flat fronts; low-poly kit pieces</td></tr>
+        <tr><td>Map file (GLB)</td><td class="num">5.9 MB</td><td class="num">≤ 8 MB</td><td>Compressed meshes; one shared building texture sheet plus one sign texture, 2048 px</td></tr>
+        <tr><td>Lighting</td><td>baked lightmap</td><td>baked lightmap</td><td>Lighting stays baked (no real-time shadows); the Subway gets its lamps baked in</td></tr>
+        <tr><td>Props</td><td>merged</td><td class="num">1 draw / prop type</td><td>Cars, barrels, benches, lamps, stalls drawn as instanced copies</td></tr>
+        <tr><td>Hidden areas</td><td>none</td><td>Subway on/off</td><td>Draw the Subway only while the player is in or near it, and hide distant street-level areas while they're underground</td></tr>
+        <tr><td>Collision</td><td class="num">76 KB</td><td class="num">≤ 150 KB</td><td>Separate simplified collision mesh (as today, including player-only window sills)</td></tr>
+        <tr><td>Fog / far plane</td><td class="num">185 / 200 m</td><td>same</td><td>The map is 160 m corner to corner, so all of it fits inside the fog distance</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section>
+  <h2>Checks to pass when it's built</h2>
+  <ul>
+    <li>Walk every route on both halves: spawn → each lane → enemy spawn; every stair, ramp, ladder and skybridge.</li>
+    <li>Cast rays from each sniper perch: no clear line to any spawn exit; S1–S5 lengths match the table (±5 m).</li>
+    <li>Time from spawn to Plaza is 7–9 s for both teams; the two halves give matching times.</li>
+    <li>Speed hack jumps work at every route listed above, and normal players can't make them.</li>
+    <li>Bots can still get everywhere: the bot route planner needs new connection points for ladders and the Subway.</li>
+    <li>Frame time on a mid-range laptop: compare 60 fps at the Plaza, on the Hospital roof and in the Subway with today's map.</li>
+  </ul>
+</section>
+
+<section>
+  <h2>Open questions</h2>
+  <ul>
+    <li><b>Symmetry:</b> mirrored halves (this plan: both teams have the Canal on their west) or rotated halves like today's map (each team has the Canal on a different side)? Mirroring keeps lane names the same for everyone.</li>
+    <li><b>Size:</b> 96 × 128 m suits 4v4 to 6v6. For smaller rooms the Market Alley and Warehouse / Factory could be closed off as a "small" version.</li>
+    <li><b>Ladders:</b> the game has no ladders yet. The crane and tower top need either ladders (new movement code) or tight switchback stairs.</li>
+    <li><b>Build order:</b> start with plain grey boxes for the whole layout and play-test lanes and sightlines, then add textures building by building.</li>
+  </ul>
+</section>
+
+<section class="sources">
+  <h2 style="font-size:22px">Sources</h2>
+  <ul>
+    <li><a href="https://www.gamedeveloper.com/design/why-is-de_dust2-s-level-design-so-popular-">Why is de_dust2's level design so popular? (Game Developer)</a></li>
+    <li><a href="https://pcgamer.com/why-is-dust2-so-popular-and-other-questions-answered-by-veteran-csgo-mapmakers">Why is Dust2 so popular? Veteran CS:GO mapmakers answer (PC Gamer)</a></li>
+    <li><a href="https://www.fandom.com/articles/counter-strike-dust-2">Breaking down the greatest FPS map with its creator (Fandom)</a></li>
+    <li><a href="https://www.jmeiners.com/shamans/papers/art/bungie_map_design.pdf">Bungie map design notes (Lockout)</a></li>
+    <li><a href="https://www.halopedia.org/The_Cage">Halopedia</a></li>
+    <li><a href="https://vip-develop.destructoid.com/?p=613861">Best Halo multiplayer maps (Destructoid)</a></li>
+    <li><a href="https://www.gamesradar.com/how-to-build-a-great-call-of-duty-multiplayer-map-according-to-the-players-that-know-the-game-best">How to build a great Call of Duty map, according to the players (GamesRadar)</a></li>
+    <li><a href="https://www.gfinityesports.com/article/modern-warfare-crash-map-guide-tips-and-tricks-to-improve-your-gameplay-on-call-of-duty-modern-warfare-2019">Crash map guide (Gfinity)</a></li>
+    <li><a href="https://dignitas.gg/articles/blogs/valorant/14312/all-valorant-maps-and-callouts-use-the-right-name-to-call-out-a-location">All Valorant maps and callouts (Dignitas)</a></li>
+    <li><a href="https://kotaku.com/an-in-depth-look-at-overwatchs-eichenwalde-map-1797348568">An in-depth look at Overwatch's Eichenwalde map (Kotaku)</a></li>
+    <li><a href="https://gosugamers.net/overwatch/features/38997-aaron-keller-on-building-overwatch-that-thing-still-keeps-me-up-at-night">Aaron Keller on building Overwatch (GosuGamers)</a></li>
+  </ul>
+</section>
+
+</div>
+
+</body></html>

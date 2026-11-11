@@ -2010,7 +2010,8 @@ body), with the preview's pose.
 ## 58. Clock Tower District grey box; ladders; callouts (2026-11-06)
 
 Tester feedback: buildings you can name, and real sniping spots. Blueprint
-(published page): https://claude.ai/artifact/TQAqcKbaK8rvvz1DBCx93G. Built
+(published page): https://claude.ai/artifact/TQAqcKbaK8rvvz1DBCx93G; a copy is in
+docs/clock-tower-district-blueprint.html. Built
 as a grey box first, as a second map next to Downtown.
 
 ### Map

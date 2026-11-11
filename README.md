@@ -169,8 +169,11 @@ piece with names, plus draw calls, triangles and GPU texture memory).
 
 ## The map: Clock Tower District
 
-It follows the blueprint at
-https://claude.ai/artifact/TQAqcKbaK8rvvz1DBCx93G: a 88 x 120 m
+It follows the blueprint in
+[`docs/clock-tower-district-blueprint.html`](docs/clock-tower-district-blueprint.html)
+(open it in a browser; also at https://claude.ai/artifact/TQAqcKbaK8rvvz1DBCx93G).
+That was the original proposal: the map has changed since in places, and
+`tools/district_generator.py` is what it is now. In short: a 88 x 120 m
 city block, Blue spawning in Central Station (north) and Red in City Hall
 (south), mirrored across the middle, three lanes (Canal, Main Street, Market
 Alley) with a Subway underneath, rooftops above, and the Clock Tower and the
