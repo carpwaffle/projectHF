@@ -9,7 +9,7 @@ import {
   MODES, weaponAllowed, weaponPrice, hacksOffMask,
   PICKUP_RADIUS, PICKUP_RESPAWN, randomPickupWeapon, HEAL_RESPAWN, ALL_SPOTS, MONEY_AMOUNT, MONEY_RESPAWN,
   SURVIVAL_RATE, KILL_REWARD, PLAYER_TIMEOUT, ALL_HACKS, HACK_LIMIT, hasHack, withinHackLimit, hacksPrice, HACK_HP, HEAL_AMOUNT, VICTORY_SCREEN, fireCooldown,
-  FAKE_LAG_GHOST, FAKE_LAG_REVEAL, SMOKE, THROW_TIME, THROW_RELEASE, smokeBlocks,
+  CHAT_MAX, CHAT_GAP, FAKE_LAG_GHOST, FAKE_LAG_REVEAL, SMOKE, THROW_TIME, THROW_RELEASE, smokeBlocks,
   pickSpawn, lookDir, rayPlayer, normalize, PLAYER_RADIUS,
 } from './shared.js';
 import { SKINS } from './assets.js';
@@ -84,7 +84,22 @@ export class HostServer {
   }
 
   broadcast(msg, reliable = true) {
-    for (const id of this.players.keys()) this.sendTo(id, msg, reliable);
+    this.sendMany([...this.players.keys()], msg, reliable);
+  }
+
+  // The same message to several players. Those on the relay get it as one
+  // message for all (the relay copies it to each: less of its quota).
+  sendMany(ids, msg, reliable = true) {
+    const relayed = [];
+    for (const id of ids) {
+      const conn = this.conns.get(id)?.rel;
+      if (conn?.relay) {
+        if (conn.open) relayed.push(id);
+      } else {
+        this.sendTo(id, msg, reliable);
+      }
+    }
+    if (relayed.length) this.conns.get(relayed[0]).rel.relay.send(relayed, msg);
   }
 
   // ---- players -----------------------------------------------------------
@@ -198,6 +213,7 @@ export class HostServer {
     else if (msg.t === 'shoot') this.onShoot(player, msg);
     else if (msg.t === 'throw') this.onThrow(player, msg);
     else if (msg.t === 'reload') this.onReload(player);
+    else if (msg.t === 'chat') this.onChat(player, msg.text);
     else if (msg.t === 'weapon') this.onWeapon(player, msg.w);
     else if (msg.t === 'spawn') this.onSpawn(player, msg.w, msg.h ?? 0);
     else if (msg.t === 'bots' && id === HOST_ID) this.bots.setFill(msg.n);
@@ -321,6 +337,17 @@ export class HostServer {
     const { yaw } = seen(victim);
     const behind = -Math.sin(yaw) * fx - Math.cos(yaw) * fz > BACKSTAB;
     this.applyHit(shooter, victim, behind ? weapon.melee.backDamage : weapon.damage, false, eye, now);
+  }
+
+  // A chat message: to everyone, with the sender's name and team (trimmed,
+  // at most CHAT_MAX characters, one per CHAT_GAP seconds per player).
+  onChat(p, text) {
+    const now = performance.now() / 1000;
+    if (typeof text !== 'string' || now - (p.chatAt ?? 0) < CHAT_GAP) return;
+    text = text.replace(/\s+/g, ' ').trim().slice(0, CHAT_MAX);
+    if (!text) return;
+    p.chatAt = now;
+    this.broadcast({ t: 'chat', name: p.name, team: p.team, text });
   }
 
   // A smoke bomb thrown: if theirs is ready, it leaves the hand
@@ -649,7 +676,7 @@ export class HostServer {
       t: 'snap', n, pk, pt, sk, tk: this.teamKills,
       players: players.map((s, i) => (all[i].team === team ? { ...s, h: all[i].hack } : s)),
     }));
-    for (const p of all) this.sendTo(p.id, byTeam[p.team], false);
+    for (const team of [0, 1]) this.sendMany(all.filter((p) => p.team === team).map((p) => p.id), byTeam[team], false);
   }
 
   // Someone bought the victory hack: their team wins.

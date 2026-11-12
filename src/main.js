@@ -219,6 +219,12 @@ window.addEventListener('beforeunload', (e) => {
 });
 
 window.addEventListener('keydown', (e) => {
+  if (chatOpen()) return; // (typing: see the chat input)
+  if (e.code === 'Enter' && session && !e.isComposing) {
+    e.preventDefault();
+    openChat();
+    return;
+  }
   keys.add(e.code);
   if ((e.ctrlKey || e.altKey) && locked()) e.preventDefault(); // (Ctrl: crouch, Alt: aim hack; not the browser's shortcuts)
   if (e.code === 'Tab' && session) { e.preventDefault(); $('scoreboard').hidden = false; }
@@ -256,7 +262,7 @@ document.addEventListener('mousemove', (e) => {
   me.pitch = Math.max(-1.55, Math.min(1.55, me.pitch - e.movementY * sensitivity));
 });
 document.addEventListener('mousedown', (e) => {
-  if (!locked() || buy) return;
+  if (!locked() || buy || chatOpen()) return;
   if (e.button === 0) { mouseDown = true; triggerPressed = true; }
   if (e.button === 2) aimHeld = true;
 });
@@ -266,7 +272,7 @@ document.addEventListener('mouseup', (e) => {
 });
 
 function readMoveInput() {
-  const active = locked() && !me.dead;
+  const active = locked() && !me.dead && !chatOpen();
   const k = (code) => (active && keys.has(code) ? 1 : 0);
   return {
     forward: k('KeyW') - k('KeyS'),
@@ -422,6 +428,9 @@ function onMessage(msg) {
       break;
     case 'feed':
       addFeed(feedText(msg));
+      break;
+    case 'chat':
+      addChat(msg);
       break;
   }
 }
@@ -673,6 +682,63 @@ function feedText(msg) {
     case 'noBots': return t('feed.noBots');
     default: return msg.text ?? '';
   }
+}
+
+// ---- chat ------------------------------------------------------------------
+// Enter opens the box, Enter sends (to everyone, through the host), Esc
+// cancels. Lines fade after CHAT_SHOW seconds; all of the recent ones show
+// while the box is open. Moving and shooting pause while typing.
+
+const CHAT_LINES = 10;
+const CHAT_SHOW = 10;
+let chatWasLocked = false; // opened while playing (the mouse locked)
+const chatOpen = () => !$('chatInput').hidden;
+
+function openChat() {
+  keys.clear();
+  mouseDown = false;
+  aimHeld = false;
+  chatWasLocked = locked();
+  $('chatInput').hidden = false;
+  $('chat').classList.add('open');
+  $('chatInput').focus();
+}
+
+function closeChat() {
+  $('chatInput').value = '';
+  $('chatInput').hidden = true;
+  $('chat').classList.remove('open');
+  $('chatInput').blur();
+}
+
+$('chatInput').addEventListener('keydown', (e) => {
+  e.stopPropagation();
+  if (e.isComposing || e.keyCode === 229) return; // (Korean input: Enter finishes the syllable first)
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    const text = $('chatInput').value.trim();
+    if (text && session) session.send({ t: 'chat', text }, true);
+    closeChat();
+  } else if (e.key === 'Escape') {
+    e.preventDefault();
+    closeChat();
+  }
+});
+// Esc while playing also releases the mouse (the browser takes that key):
+// close the box then too.
+document.addEventListener('pointerlockchange', () => { if (!locked() && chatWasLocked && chatOpen()) closeChat(); });
+
+// A line: the sender's name in their team's colour, then the text (as text).
+function addChat({ name, team, text }) {
+  const line = document.createElement('div');
+  const who = document.createElement('b');
+  who.textContent = name;
+  who.style.color = TEAMS[team]?.color ?? '#fff';
+  line.append(who, String(text));
+  const log = $('chatLog');
+  log.append(line);
+  while (log.children.length > CHAT_LINES) log.firstChild.remove();
+  setTimeout(() => line.classList.add('old'), CHAT_SHOW * 1000);
 }
 
 function addFeed(text) {
@@ -1328,6 +1394,8 @@ function leaveGame(reason) {
   damageDirs = [];
   me.protectedUntil = 0;
   $('teamScore').replaceChildren();
+  closeChat();
+  $('chatLog').replaceChildren();
   me.dead = false;
   me.hp = MAX_HP;
   me.weapon = DEFAULT_WEAPON;
@@ -1405,7 +1473,7 @@ $('joinBtn').addEventListener('click', async () => {
 
   let conn;
   try {
-    conn = await joinRoom(code);
+    conn = await joinRoom(code, () => setStatus('status.relaying'));
   } catch (err) {
     setStatusError(err);
     setBusy(false);

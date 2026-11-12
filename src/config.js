@@ -21,3 +21,10 @@
 export const ICE_SERVERS = [
   { urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] },
 ];
+
+// The relay players fall back to when they can't connect directly (relay/,
+// a Cloudflare Worker: see README "Relay"). Empty: no relay. On localhost:
+// the local one (`npm run dev` in relay/; if it isn't running, hosting and
+// joining just go without it).
+const LOCAL = ['localhost', '127.0.0.1', '[::1]'].includes(location.hostname);
+export const RELAY_URL = LOCAL ? 'ws://127.0.0.1:8787' : 'wss://hackfps-relay.hamburgler.workers.dev';

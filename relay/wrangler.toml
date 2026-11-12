@@ -1,0 +1,14 @@
+# Hack FPS relay (see src/index.js). Deploy: npx wrangler deploy
+name = "hackfps-relay"
+main = "src/index.js"
+compatibility_date = "2025-07-18"
+
+[[durable_objects.bindings]]
+name = "ROOMS"
+class_name = "Room"
+
+# SQLite-backed Durable Objects: the kind the Workers Free plan allows (the
+# relay stores nothing in it).
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Room"]

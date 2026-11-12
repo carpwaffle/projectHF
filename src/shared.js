@@ -221,6 +221,8 @@ export const CLIMB_SPEED = 3.5; // m/s up or down a ladder
 export const HACK_HP = 1500; // max HP with the HP hack
 export const HEAL_AMOUNT = 100; // a heal pack heals this much (up to max HP)
 export const FAST_CYCLE = 0.5; // infinite ammo: shotgun pump / sniper bolt time multiplier
+export const CHAT_MAX = 100; // characters per chat message
+export const CHAT_GAP = 0.6; // seconds between one player's chat messages (more are dropped)
 export const VICTORY_SCREEN = 10; // seconds the winning team is shown before the next round
 
 // Seconds between shots for a weapon, with the player's hacks (mask).

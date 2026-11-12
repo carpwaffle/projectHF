@@ -28,7 +28,7 @@ ES modules don't load from `file://`, so you need a local server. To play
 with friends over the internet, put these static files on any host, such as
 GitHub Pages, Netlify or itch.io.
 
-Controls: WASD move · Space jump · Ctrl or Shift (hold) crouch · Mouse aim · Click shoot · R reload · C smoke bomb (then click to throw) · Q / E fly up / down (fly hack) · Alt aim lock (aim hack; the triggerbot fires by itself) · 1-7 / wheel switch weapon (only for the player named "Admin") · Right mouse scope (sniper) · M mute · Tab scoreboard · Esc release mouse.
+Controls: WASD move · Space jump · Ctrl or Shift (hold) crouch · Mouse aim · Click shoot · R reload · C smoke bomb (then click to throw) · Q / E fly up / down (fly hack) · Alt aim lock (aim hack; the triggerbot fires by itself) · 1-7 / wheel switch weapon (only for the player named "Admin") · Right mouse scope (sniper) · Enter chat (type, Enter to send, Esc to cancel) · M mute · Tab scoreboard · Esc release mouse.
 
 **Smoke bomb.** Everyone spawns with one. C takes it out (or puts it
 away): you hold it out, and a red line shows where it'll go and a ring where
@@ -192,6 +192,11 @@ police desks, station couches, a café, warehouse racks). Cars,
 crates, barrels, planters and tree trunks are solid cover (shots pass
 through leaves).
 
+- **Chat:** Enter opens a box at the bottom left; Enter sends to everyone
+  (both teams), Esc cancels. Names show in their team's colour; lines fade
+  after 10 s and all recent ones show while the box is open. Moving and
+  shooting pause while you type. The host trims messages to 100 characters
+  and drops more than one per 0.6 s per player.
 - **Callouts:** the HUD shows where you are under the room line
   ("병원 · 4F", "Hotel · Roof"); the map hack's minimap shows the names too.
 - **Footsteps** on metal (the Warehouse / Factory catwalks, the crane's
@@ -333,9 +338,37 @@ direct connection"**:
   Settings → Privacy & Security → Local Network**.
 - **Different computers:** VPNs (e.g. corporate Cisco/AnyConnect), some
   routers and some networks (mobile, school, office) block direct connections.
-  Try with the VPN off, or add a TURN relay
-  server to `ICE_SERVERS` in `src/config.js`. The free public relays have
-  shut down, so use your own credentials, for example from Cloudflare
-  Realtime TURN or Metered.ca (both have free tiers).
+  With the relay set up (below), players join through it automatically
+  instead; without it, try with the VPN off.
 
 Lines starting with `[net]` in the browser console show connection progress.
+
+## Relay (for VPNs and strict networks)
+
+Players normally connect straight to the host's browser (WebRTC through
+PeerJS). When that fails, or PeerJS's server can't be reached, the game falls
+back to a small relay on Cloudflare (`relay/`): a Worker with one Durable
+Object per room. The host opens the room on PeerJS and on the relay; a
+player tries the direct way first (up to 8 s) and then joins through the
+relay ("No direct connection: connecting through the relay…"). It's ordinary
+secure WebSocket traffic on port 443, which VPNs and firewalls let through.
+The relay only passes messages between the host and the players (the host's
+browser still runs the game), stores nothing, and only accepts the game's
+own site (`https://carpwaffle.github.io`) and localhost. A room can mix
+direct and relayed players.
+
+- **Local testing:** `cd relay && npm install && npm run dev` (port 8787).
+  On localhost the game uses it automatically (`RELAY_URL` in
+  `src/config.js`); add `&relay` to the page address to join through it
+  without trying the direct way first.
+- **Deployed** at `wss://hackfps-relay.hamburgler.workers.dev` (`RELAY_URL`
+  in `src/config.js`). To update it: `cd relay`, `npx wrangler login` once,
+  then `npm run deploy`. Wrangler 3 is used because Wrangler 4 needs Node
+  22.12+.
+- **Lag:** from Korea, Cloudflare's free plan routes through Singapore, so a
+  relayed player's round trip to the host is about 200-300 ms (direct: 10-30
+  ms within Korea). That's why it's only a fallback.
+- **Cost:** the free Workers plan includes Durable Objects (about 100,000
+  requests a day; going over makes the relay refuse until the next day, it
+  never bills). Only relayed players count, and the host sends each team's
+  snapshot to the relay once for all its relayed players.

@@ -84,6 +84,16 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #000; font-f
 #teamScore .mine { text-decoration: underline; text-underline-offset: 4px; }
 #killfeed { position: absolute; top: 12px; right: 12px; display: flex; flex-direction: column; gap: 4px; align-items: flex-end; font-size: 14px; }
 #killfeed div { background: rgba(0, 0, 0, 0.5); padding: 4px 8px; border-radius: 4px; }
+/* Chat: bottom left, above the minimap; lines fade after a while unless it's open. */
+#chat { position: absolute; left: 16px; bottom: 330px; width: min(440px, calc(100vw - 32px)); display: flex; flex-direction: column; gap: 4px; font-size: 14px; }
+#chatLog { display: flex; flex-direction: column; gap: 2px; max-height: 230px; overflow: hidden; justify-content: flex-end; }
+#chatLog div { padding: 2px 8px; border-radius: 4px; background: rgba(0, 0, 0, 0.45); text-shadow: 0 0 3px #000; overflow-wrap: anywhere; transition: opacity 0.6s; }
+#chatLog div.old { opacity: 0; }
+#chat.open #chatLog div { opacity: 1; }
+#chatLog b { margin-right: 6px; }
+#chatInput { pointer-events: auto; padding: 7px 10px; border: 1px solid #888; border-radius: 4px; background: rgba(0, 0, 0, 0.7); color: #fff; font: inherit; outline: none; }
+#chatInput[hidden] { display: none; }
+#hud:has(#minimap[hidden]) #chat { bottom: 16px; } /* (no minimap: down in the corner) */
 #hp { position: absolute; bottom: 84px; right: 20px; font-size: 36px; font-weight: 700; text-shadow: 0 0 4px #000; }
 #hp::before { content: "HP "; font-size: 16px; color: #aaa; }
 #ammo { position: absolute; bottom: 20px; right: 20px; font-size: 20px; color: #ccc; text-shadow: 0 0 4px #000; }
